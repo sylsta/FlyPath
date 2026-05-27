@@ -16,6 +16,7 @@ from qgis.PyQt.QtCore import Qt, QObject, QEvent, QSettings, QVariant
 from qgis.PyQt.QtGui import QColor, QFont
 
 from qgis.core import (
+    Qgis,
     QgsProject,
     QgsWkbTypes,
     QgsVectorLayer,
@@ -1337,7 +1338,10 @@ class FlyPathDialog(QWidget):
         # Labels: sequence number centred on each marker
         lbl = QgsPalLayerSettings()
         lbl.fieldName  = 'seq'
-        lbl.placement  = QgsPalLayerSettings.OverPoint
+        try:
+            lbl.placement = Qgis.LabelPlacement.OverPoint   # QGIS 3.38+
+        except AttributeError:
+            lbl.placement = QgsPalLayerSettings.OverPoint   # QGIS 3.16–3.36
         lbl.priority   = 10
         fmt = QgsTextFormat()
         fmt.setFont(QFont('Segoe UI', 7, QFont.Bold))
