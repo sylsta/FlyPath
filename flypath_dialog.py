@@ -531,12 +531,6 @@ class FlyPathDialog(QWidget):
         form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         form.setSpacing(6)
 
-        self.altitudeModeCombo = QComboBox()
-        self._tip(self.altitudeModeCombo,
-            'AGL: altitude measured from the takeoff point — simplest and most common. '
-            'MSL: altitude measured from sea level — use over varying terrain with an accurate DEM.')
-        form.addRow('Altitude Mode', self.altitudeModeCombo)
-
         self.finishActionCombo = QComboBox()
         self._tip(self.finishActionCombo,
             'What the drone does after the last waypoint. '
@@ -658,10 +652,7 @@ class FlyPathDialog(QWidget):
         self.droneModelCombo.addItems(list(DRONE_SPECS.keys()))
         self.droneModelCombo.setCurrentText('DJI Mini 4 Pro')
 
-        self.altitudeModeCombo.addItems([
-            'AGL  (Relative to takeoff)',
-            'MSL  (Absolute)',
-        ])
+
         self.finishActionCombo.addItems([
             'Return to Home',
             'Hover in place',
@@ -1664,7 +1655,6 @@ class FlyPathDialog(QWidget):
                     speed_ms=self.speedSpin.value(),
                     finish_action_label=self.finishActionCombo.currentText(),
                     rc_lost_action_label=self.rcLostActionCombo.currentText(),
-                    altitude_mode_label=self.altitudeModeCombo.currentText(),
                     interval_s=self.photoIntervalSpin.value(),
                     gimbal_pitch=self.gimbalAngleSpin.value(),
                     mission_name=mission,

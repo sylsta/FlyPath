@@ -45,11 +45,6 @@ _RC_LOST_ACTION = {
     'Continue mission': ('goContinue',        'goBack'),
 }
 
-# ── Altitude mode mapping ──────────────────────────────────────────────────
-_HEIGHT_MODE = {
-    'AGL  (Relative to takeoff)': 'relativeToStartPoint',
-    'MSL  (Absolute)':            'WGS84',
-}
 
 # ── WPML namespace (native RC2 format) ────────────────────────────────────
 _NS = 'http://www.uav.com/wpmz/1.0.2'
@@ -58,7 +53,7 @@ _NS = 'http://www.uav.com/wpmz/1.0.2'
 # ── Public API ─────────────────────────────────────────────────────────────
 
 def write_kmz(filepath, waypoints, drone_name, altitude_m, speed_ms,
-              finish_action_label, rc_lost_action_label, altitude_mode_label,
+              finish_action_label, rc_lost_action_label,
               interval_s, gimbal_pitch=-90, mission_name='FlyPath Mission'):
     """
     Write a single DJI-compatible KMZ file.
@@ -91,7 +86,7 @@ def write_kmz(filepath, waypoints, drone_name, altitude_m, speed_ms,
 
     drone_enum             = _DRONE_ENUM.get(drone_name, 68)
     finish_action          = _FINISH_ACTION.get(finish_action_label, 'goHome')
-    height_mode            = _HEIGHT_MODE.get(altitude_mode_label, 'relativeToStartPoint')
+    height_mode            = 'relativeToStartPoint'
     exit_on_rc_lost, rc_lost_action = _RC_LOST_ACTION.get(
         rc_lost_action_label, ('executeLostAction', 'goBack')
     )
