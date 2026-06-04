@@ -423,16 +423,6 @@ class FlyPathDialog(QWidget):
             'Smaller GSD = higher resolution. Calculated from altitude, sensor size and focal length.')
         form.addRow('GSD', self.gsdLabel)
 
-        self.frontOverlapSpin = QSpinBox()
-        self.frontOverlapSpin.setRange(50, 95)
-        self.frontOverlapSpin.setValue(80)
-        self.frontOverlapSpin.setSuffix(' %')
-        self._tip(self.frontOverlapSpin,
-            'How much consecutive photos along a flight line overlap. '
-            'Higher → better quality, fewer gaps, but more photos. '
-            'Recommended: 75–85% for mapping, 85–90% for 3D models.')
-        form.addRow('Front Overlap', self.frontOverlapSpin)
-
         self.sideOverlapSpin = QSpinBox()
         self.sideOverlapSpin.setRange(50, 95)
         self.sideOverlapSpin.setValue(70)
@@ -695,7 +685,6 @@ class FlyPathDialog(QWidget):
 
         self.droneModelCombo.currentIndexChanged.connect(self._on_drone_changed)
         self.altitudeSpin.valueChanged.connect(self._on_param_changed)
-        self.frontOverlapSpin.valueChanged.connect(self._on_param_changed)
         self.sideOverlapSpin.valueChanged.connect(self._on_param_changed)
         self.speedSpin.valueChanged.connect(self._on_param_changed)
         self.photoIntervalSpin.valueChanged.connect(self._on_param_changed)
@@ -1757,11 +1746,14 @@ class FlyPathDialog(QWidget):
         drone = self.droneModelCombo.currentText()
         if drone not in DRONE_SPECS:
             return None
+        shot_spacing_m = max(
+            self.speedSpin.value() * self.photoIntervalSpin.value(), 0.5
+        )
         waypoints, shot_spacing_m = generate_flight_grid(
             polygon_geom=self._survey_polygon,
             polygon_crs=self._survey_polygon_crs,
             altitude_m=self.altitudeSpin.value(),
-            front_overlap=self.frontOverlapSpin.value() / 100.0,
+            shot_spacing_m=shot_spacing_m,
             side_overlap=self.sideOverlapSpin.value() / 100.0,
             direction_deg=self.directionSpin.value(),
             margin_m=self.marginSpin.value(),

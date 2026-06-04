@@ -27,7 +27,7 @@ from qgis.core import (
 # ── Public functions ──────────────────────────────────────────────────────────
 
 def generate_flight_grid(polygon_geom, polygon_crs, altitude_m,
-                          front_overlap, side_overlap, direction_deg,
+                          shot_spacing_m, side_overlap, direction_deg,
                           margin_m, drone_specs):
     """
     Generate a lawnmower (boustrophedon) flight grid for 2D mapping.
@@ -38,11 +38,11 @@ def generate_flight_grid(polygon_geom, polygon_crs, altitude_m,
 
     Parameters
     ----------
-    polygon_geom  : QgsGeometry  — survey area polygon (any CRS)
-    polygon_crs   : QgsCoordinateReferenceSystem
-    altitude_m    : float        — AGL flight altitude in metres
-    front_overlap : float        — 0.0–1.0  (e.g. 0.80 for 80 %)
-    side_overlap  : float        — 0.0–1.0
+    polygon_geom   : QgsGeometry  — survey area polygon (any CRS)
+    polygon_crs    : QgsCoordinateReferenceSystem
+    altitude_m     : float        — AGL flight altitude in metres
+    shot_spacing_m : float        — along-track distance between photos (speed × interval)
+    side_overlap   : float        — 0.0–1.0
     direction_deg : float        — flight-line direction, degrees CW from North
     margin_m      : float        — buffer to add around polygon (metres)
     drone_specs   : dict         — entry from DRONE_SPECS in flypath_dialog.py
@@ -83,10 +83,9 @@ def generate_flight_grid(polygon_geom, polygon_crs, altitude_m,
     sh = drone_specs['sensor_height_mm']
 
     footprint_across = altitude_m * sw / fl          # perpendicular to flight
-    footprint_along  = altitude_m * sh / fl          # along flight direction
 
-    line_spacing = max(footprint_across * (1.0 - side_overlap),  0.5)
-    shot_spacing = max(footprint_along  * (1.0 - front_overlap), 0.5)
+    line_spacing = max(footprint_across * (1.0 - side_overlap), 0.5)
+    shot_spacing = max(shot_spacing_m, 0.5)
 
     # 6 ── Rotate polygon so the flight direction aligns with +Y
     centroid_utm = poly_utm.centroid().asPoint()
