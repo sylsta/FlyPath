@@ -1503,52 +1503,70 @@ class FlyPathDialog(QWidget):
                 return
             waypoints, shot_spacing_m = result
 
-        rc_dir = self.rcPathEdit.text().strip()
-
-        # ── MTP device path (e.g. "This PC\DJI RC 2\...") ─────────────────
-        if rc_dir and not os.path.isdir(rc_dir):
-            ok, detail = self._export_to_mtp_rc(rc_dir, mission,
-                                                 waypoints, shot_spacing_m)
-            if ok:
-                QMessageBox.information(
-                    self, 'Exported to RC',
-                    f'Waypoints: {len(waypoints):,}  ·  '
-                    f'Interval: {self.photoIntervalSpin.value():.1f} s\n\n'
-                    f'Replaced mission on RC:\n{detail}'
-                )
-            else:
-                QMessageBox.critical(self, 'RC Export Failed', detail)
-            return
-
-        # ── Real filesystem path — auto-replace on RC ──────────────────────
+        rc_dir   = self.rcPathEdit.text().strip()
         filepath = None
-        if rc_dir and os.path.isdir(rc_dir):
-            kmz = self._latest_mission_kmz(rc_dir)
-            if kmz:
-                uuid_name = os.path.basename(os.path.dirname(kmz))
-                reply = QMessageBox.question(
-                    self, 'Replace RC Mission?',
-                    f'Replace the latest mission on the RC?\n\n'
-                    f'UUID: {uuid_name}\n'
-                    f'File: {kmz}',
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.Yes,
-                )
-                if reply == QMessageBox.Yes:
-                    filepath = kmz
+
+        if rc_dir:
+            drive, _ = os.path.splitdrive(rc_dir)
+            is_local = bool(drive) or rc_dir.startswith('\\\\')
+
+            if is_local:
+                # ── Local filesystem path (PC folder, external disk, etc.) ──
+                if not os.path.isdir(rc_dir):
+                    reply = QMessageBox.question(
+                        self, 'Create Folder?',
+                        f'The folder does not exist:\n{rc_dir}\n\n'
+                        f'Create it and save FlyPath_Mission.kmz there?',
+                        QMessageBox.Yes | QMessageBox.No,
+                        QMessageBox.Yes,
+                    )
+                    if reply != QMessageBox.Yes:
+                        return
+                    try:
+                        os.makedirs(rc_dir, exist_ok=True)
+                    except Exception as exc:
+                        QMessageBox.critical(self, 'Cannot Create Folder', str(exc))
+                        return
+                # Check for UUID RC mission folders first
+                kmz = self._latest_mission_kmz(rc_dir)
+                if kmz:
+                    uuid_name = os.path.basename(os.path.dirname(kmz))
+                    reply = QMessageBox.question(
+                        self, 'Replace RC Mission?',
+                        f'Replace the latest mission on the RC?\n\n'
+                        f'UUID: {uuid_name}\n'
+                        f'File: {kmz}',
+                        QMessageBox.Yes | QMessageBox.No,
+                        QMessageBox.Yes,
+                    )
+                    if reply == QMessageBox.Yes:
+                        filepath = kmz
+                    else:
+                        return
+                else:
+                    # Plain folder — save directly
+                    filepath = os.path.join(rc_dir, 'FlyPath_Mission.kmz')
+
             else:
-                QMessageBox.warning(
-                    self, 'No Mission Found',
-                    'No existing mission found in the RC waypoint folder.\n\n'
-                    'Create a dummy mission on the RC first, then export again.'
-                )
+                # ── MTP device path (e.g. "This PC\DJI RC 2\...") ─────────
+                ok, detail = self._export_to_mtp_rc(rc_dir, mission,
+                                                     waypoints, shot_spacing_m)
+                if ok:
+                    QMessageBox.information(
+                        self, 'Exported to RC',
+                        f'Waypoints: {len(waypoints):,}  ·  '
+                        f'Interval: {self.photoIntervalSpin.value():.1f} s\n\n'
+                        f'Replaced mission on RC:\n{detail}'
+                    )
+                else:
+                    QMessageBox.critical(self, 'RC Export Failed', detail)
                 return
 
         # ── Fall back to standard save dialog ─────────────────────────────
         if not filepath:
             filepath, _ = QFileDialog.getSaveFileName(
                 self, 'Export Mission KMZ',
-                mission.replace(' ', '_') + '.kmz',
+                'FlyPath_Mission.kmz',
                 'DJI Mission File (*.kmz)'
             )
         if not filepath:
@@ -1562,7 +1580,7 @@ class FlyPathDialog(QWidget):
                 altitude_m=self.altitudeSpin.value(),
                 speed_ms=self.speedSpin.value(),
                 finish_action_label=self.finishActionCombo.currentText(),
-                altitude_mode_label=self.altitudeModeCombo.currentText(),
+                rc_lost_action_label=self.rcLostActionCombo.currentText(),
                 interval_s=self.photoIntervalSpin.value(),
                 gimbal_pitch=self.gimbalAngleSpin.value(),
                 mission_name=mission,
