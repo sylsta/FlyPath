@@ -175,9 +175,13 @@ QScrollBar::handle:vertical {
 QScrollBar::handle:vertical:hover  { background-color: #5A5D65; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QLabel#gsdLabel, QLabel#areaLabel, QLabel#intervalLabel,
+QLabel#frontOverlapLabel,
 QLabel#flightTimeLabel, QLabel#distanceLabel, QLabel#photosLabel,
 QLabel#linesLabel, QLabel#batteriesLabel, QLabel#coverageLabel {
     color: #F0A500; font-weight: bold;
+}
+QLabel#frontOverlapWarnLabel {
+    color: #E05050; font-weight: bold;
 }
 QLabel#cameraInfoLabel { color: #7FB3E8; font-size: 10px; }
 QWidget#actionBar {
@@ -519,9 +523,18 @@ class FlyPathDialog(QWidget):
         self.intervalLabel = QLabel('—')
         self.intervalLabel.setObjectName('intervalLabel')
         self._tip(self.intervalLabel,
-            'Effective along-track photo spacing (speed × interval) and the '
-            'equivalent front overlap percentage at the current altitude.')
-        form.addRow('Effective Spacing', self.intervalLabel)
+            'Effective along-track distance between photos: speed × interval. '
+            'Smaller spacing means more photos and higher overlap.')
+        form.addRow('Shot Spacing', self.intervalLabel)
+
+        self.frontOverlapLabel = QLabel('—')
+        self.frontOverlapLabel.setObjectName('frontOverlapLabel')
+        self._tip(self.frontOverlapLabel,
+            'Calculated front overlap between consecutive photos along the flight line. '
+            'Based on speed, interval, altitude and drone sensor. '
+            'Aim for 75–85% for mapping, 85–90% for 3D models. '
+            'Reduce speed or increase interval to raise overlap.')
+        form.addRow('Front Overlap', self.frontOverlapLabel)
 
         return group
 
@@ -759,11 +772,25 @@ class FlyPathDialog(QWidget):
         interval = self.photoIntervalSpin.value()
         if fh is None or spd <= 0 or interval <= 0:
             self.intervalLabel.setText('—')
+            self.frontOverlapLabel.setText('—')
+            self.frontOverlapLabel.setObjectName('frontOverlapLabel')
+            self.frontOverlapLabel.style().unpolish(self.frontOverlapLabel)
+            self.frontOverlapLabel.style().polish(self.frontOverlapLabel)
             return
         actual_spacing = spd * interval
         overlap_pct = (1.0 - actual_spacing / fh) * 100.0
-        overlap_str = f'{overlap_pct:.0f}%' if overlap_pct > 0 else '<0%'
-        self.intervalLabel.setText(f'{actual_spacing:.1f} m  ·  {overlap_str} along-track')
+        self.intervalLabel.setText(f'{actual_spacing:.1f} m')
+        if overlap_pct < 60:
+            self.frontOverlapLabel.setText(f'{overlap_pct:.0f} %  — too low, reduce speed or interval')
+            self.frontOverlapLabel.setObjectName('frontOverlapWarnLabel')
+        elif overlap_pct < 70:
+            self.frontOverlapLabel.setText(f'{overlap_pct:.0f} %  — marginal')
+            self.frontOverlapLabel.setObjectName('frontOverlapWarnLabel')
+        else:
+            self.frontOverlapLabel.setText(f'{overlap_pct:.0f} %')
+            self.frontOverlapLabel.setObjectName('frontOverlapLabel')
+        self.frontOverlapLabel.style().unpolish(self.frontOverlapLabel)
+        self.frontOverlapLabel.style().polish(self.frontOverlapLabel)
 
     # ── QGIS selection sync ───────────────────────────────────────────────
 
