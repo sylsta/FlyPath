@@ -46,7 +46,7 @@ DRONE_SPECS = {
         'focal_length_mm':  6.9,
         'image_width_px':   4000,
         'image_height_px':  3000,
-        'max_speed_ms':     16.0,
+        'max_speed_ms':     12.0,
         'battery_time_min': 34,
         'info': '1/1.3" CMOS  ·  12 MP  ·  24 mm equiv',
     },
@@ -56,7 +56,7 @@ DRONE_SPECS = {
         'focal_length_mm':  6.9,
         'image_width_px':   4000,
         'image_height_px':  3000,
-        'max_speed_ms':     16.0,
+        'max_speed_ms':     12.0,
         'battery_time_min': 34,
         'info': '1/1.3" CMOS  ·  12 MP  ·  24 mm equiv',
     },
@@ -325,13 +325,6 @@ class FlyPathDialog(QWidget):
         form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         form.setSpacing(6)
 
-        self.missionNameEdit = QLineEdit()
-        self.missionNameEdit.setPlaceholderText('My Mission')
-        self._tip(self.missionNameEdit,
-            'Mission name — used as the default KMZ filename '
-            'and embedded as metadata inside the exported file.')
-        form.addRow('Name', self.missionNameEdit)
-
         self.droneModelCombo = QComboBox()
         self._tip(self.droneModelCombo,
             'Your drone model — determines camera sensor specs, '
@@ -451,7 +444,7 @@ class FlyPathDialog(QWidget):
         form.addRow('Side Overlap', self.sideOverlapSpin)
 
         self.speedSpin = QDoubleSpinBox()
-        self.speedSpin.setRange(1.0, 15.0)
+        self.speedSpin.setRange(1.0, 12.0)
         self.speedSpin.setValue(5.0)
         self.speedSpin.setSingleStep(0.5)
         self.speedSpin.setDecimals(1)
@@ -511,25 +504,34 @@ class FlyPathDialog(QWidget):
         form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         form.setSpacing(6)
 
-        self.cameraAngleLabel = QLabel('90°  (Nadir — fixed for mapping)')
-        self._tip(self.cameraAngleLabel,
-            'Camera tilt angle. Fixed at 90° (pointing straight down) '
-            'for 2D orthomosaic mapping to ensure vertical photos.')
-        form.addRow('Angle', self.cameraAngleLabel)
+        self.gimbalAngleSpin = QSpinBox()
+        self.gimbalAngleSpin.setRange(-90, -30)
+        self.gimbalAngleSpin.setValue(-90)
+        self.gimbalAngleSpin.setSingleStep(5)
+        self.gimbalAngleSpin.setSuffix(' °')
+        self._tip(self.gimbalAngleSpin,
+            'Gimbal pitch angle. -90° points straight down (nadir) for '
+            '2D orthomosaic mapping. Tilt toward 0° for oblique photography.')
+        form.addRow('Gimbal Angle', self.gimbalAngleSpin)
 
-        self.triggerModeCombo = QComboBox()
-        self._tip(self.triggerModeCombo,
-            'How the camera shutter is triggered. '
-            'Distance (m): fires every X metres — recommended for mapping. '
-            'Time (s): fires every X seconds — useful for slower flights.')
-        form.addRow('Trigger', self.triggerModeCombo)
+        self.photoIntervalSpin = QDoubleSpinBox()
+        self.photoIntervalSpin.setRange(2.0, 60.0)
+        self.photoIntervalSpin.setValue(2.0)
+        self.photoIntervalSpin.setSingleStep(0.5)
+        self.photoIntervalSpin.setDecimals(1)
+        self.photoIntervalSpin.setSuffix(' s')
+        self._tip(self.photoIntervalSpin,
+            'Time between each photo in seconds. The drone uses auto interval '
+            'shooting — minimum 2 s at 12 MP JPEG (DJI Mini 4 Pro / Mini 3 Pro). '
+            'Actual along-track spacing = speed × interval.')
+        form.addRow('Photo Interval', self.photoIntervalSpin)
 
         self.intervalLabel = QLabel('—')
         self.intervalLabel.setObjectName('intervalLabel')
         self._tip(self.intervalLabel,
-            'Calculated distance (or time) between consecutive photos, '
-            'based on altitude, drone sensor, and front overlap setting.')
-        form.addRow('Interval', self.intervalLabel)
+            'Effective along-track photo spacing (speed × interval) and the '
+            'equivalent front overlap percentage at the current altitude.')
+        form.addRow('Effective Spacing', self.intervalLabel)
 
         return group
 
@@ -657,8 +659,6 @@ class FlyPathDialog(QWidget):
         self.droneModelCombo.addItems(list(DRONE_SPECS.keys()))
         self.droneModelCombo.setCurrentText('DJI Mini 4 Pro')
 
-        self.triggerModeCombo.addItems(['Distance (m)', 'Time (s)'])
-
         self.altitudeModeCombo.addItems([
             'AGL  (Relative to takeoff)',
             'MSL  (Absolute)',
@@ -698,8 +698,9 @@ class FlyPathDialog(QWidget):
         self.frontOverlapSpin.valueChanged.connect(self._on_param_changed)
         self.sideOverlapSpin.valueChanged.connect(self._on_param_changed)
         self.speedSpin.valueChanged.connect(self._on_param_changed)
+        self.photoIntervalSpin.valueChanged.connect(self._on_param_changed)
+        self.gimbalAngleSpin.valueChanged.connect(self._update_stats)
         self.directionSpin.valueChanged.connect(self._update_stats)
-        self.triggerModeCombo.currentIndexChanged.connect(self._update_interval)
         self.layerCombo.currentIndexChanged.connect(self._on_layer_changed)
         self.featureCombo.currentIndexChanged.connect(self._on_feature_changed)
         self.useSelectionBtn.clicked.connect(self._on_use_qgis_selection)
@@ -759,15 +760,15 @@ class FlyPathDialog(QWidget):
 
     def _update_interval(self):
         _, fh = self._footprint()
-        if fh is None:
+        spd = self.speedSpin.value()
+        interval = self.photoIntervalSpin.value()
+        if fh is None or spd <= 0 or interval <= 0:
             self.intervalLabel.setText('—')
             return
-        dist = fh * (1.0 - self.frontOverlapSpin.value() / 100.0)
-        if self.triggerModeCombo.currentText().startswith('Distance'):
-            self.intervalLabel.setText(f'{dist:.1f} m')
-        else:
-            spd = self.speedSpin.value()
-            self.intervalLabel.setText(f'{dist / spd:.1f} s' if spd > 0 else '—')
+        actual_spacing = spd * interval
+        overlap_pct = (1.0 - actual_spacing / fh) * 100.0
+        overlap_str = f'{overlap_pct:.0f}%' if overlap_pct > 0 else '<0%'
+        self.intervalLabel.setText(f'{actual_spacing:.1f} m  ·  {overlap_str} along-track')
 
     # ── QGIS selection sync ───────────────────────────────────────────────
 
@@ -1217,8 +1218,8 @@ class FlyPathDialog(QWidget):
             self._clear_stats()
             return
 
-        line_spacing = max(fw * (1.0 - self.sideOverlapSpin.value()  / 100.0), 0.5)
-        shot_spacing = max(fh * (1.0 - self.frontOverlapSpin.value() / 100.0), 0.5)
+        line_spacing   = max(fw * (1.0 - self.sideOverlapSpin.value()  / 100.0), 0.5)
+        actual_spacing = max(speed * self.photoIntervalSpin.value(), 0.5)
 
         utm = QgsCoordinateReferenceSystem('EPSG:3857')
         xf  = QgsCoordinateTransform(
@@ -1236,7 +1237,7 @@ class FlyPathDialog(QWidget):
 
         n_lines    = max(1, math.ceil(across / line_spacing) + 1)
         dist_m     = n_lines * along + (n_lines - 1) * line_spacing
-        n_photos   = max(0, int(dist_m / shot_spacing))
+        n_photos   = max(0, int(dist_m / actual_spacing))
         flight_min = dist_m / (speed * 60) if speed > 0 else 0
         batteries  = math.ceil(flight_min / s['battery_time_min'])
         area_ha    = g.area() / 10_000
@@ -1466,7 +1467,7 @@ class FlyPathDialog(QWidget):
     def _on_export(self):
         if not self._has_survey_area():
             return
-        mission = self.missionNameEdit.text().strip() or 'FlyPath Mission'
+        mission = 'FlyPath Mission'
 
         # ── Resolve waypoints first (needed for all export paths) ─────────
         if self._waypoints and self._shot_spacing_m:
@@ -1489,9 +1490,8 @@ class FlyPathDialog(QWidget):
             if ok:
                 QMessageBox.information(
                     self, 'Exported to RC',
-                    f'Mission: {mission}\n'
                     f'Waypoints: {len(waypoints):,}  ·  '
-                    f'Interval: {shot_spacing_m:.1f} m\n\n'
+                    f'Interval: {self.photoIntervalSpin.value():.1f} s\n\n'
                     f'Replaced mission on RC:\n{detail}'
                 )
             else:
@@ -1541,14 +1541,14 @@ class FlyPathDialog(QWidget):
                 speed_ms=self.speedSpin.value(),
                 finish_action_label=self.finishActionCombo.currentText(),
                 altitude_mode_label=self.altitudeModeCombo.currentText(),
-                shot_spacing_m=shot_spacing_m,
+                interval_s=self.photoIntervalSpin.value(),
+                gimbal_pitch=self.gimbalAngleSpin.value(),
                 mission_name=mission,
             )
             QMessageBox.information(
                 self, 'Export Complete',
-                f'Mission: {mission}\n'
                 f'Waypoints: {len(waypoints):,}  ·  '
-                f'Interval: {shot_spacing_m:.1f} m\n\n'
+                f'Interval: {self.photoIntervalSpin.value():.1f} s\n\n'
                 f'Saved to:\n{filepath}'
             )
         except Exception as exc:
@@ -1660,7 +1660,8 @@ class FlyPathDialog(QWidget):
                     speed_ms=self.speedSpin.value(),
                     finish_action_label=self.finishActionCombo.currentText(),
                     altitude_mode_label=self.altitudeModeCombo.currentText(),
-                    shot_spacing_m=shot_spacing_m,
+                    interval_s=self.photoIntervalSpin.value(),
+                    gimbal_pitch=self.gimbalAngleSpin.value(),
                     mission_name=mission,
                 )
             except Exception as exc:
