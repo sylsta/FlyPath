@@ -526,7 +526,7 @@ class FlyPathDialog(QWidget):
         return group
 
     def _build_advanced_group(self):
-        group = QGroupBox('Advanced')
+        group = QGroupBox('Safety Actions')
         form  = QFormLayout(group)
         form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         form.setSpacing(6)
