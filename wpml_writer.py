@@ -37,6 +37,14 @@ _FINISH_ACTION = {
     'Land at last waypoint':  'autoLand',
 }
 
+# ── RC lost action mapping ─────────────────────────────────────────────────
+_RC_LOST_ACTION = {
+    'Return to Home':   ('executeLostAction', 'goBack'),
+    'Hover in place':   ('executeLostAction', 'hover'),
+    'Land immediately': ('executeLostAction', 'landing'),
+    'Continue mission': ('goContinue',        'goBack'),
+}
+
 # ── Altitude mode mapping ──────────────────────────────────────────────────
 _HEIGHT_MODE = {
     'AGL  (Relative to takeoff)': 'relativeToStartPoint',
@@ -50,8 +58,8 @@ _NS = 'http://www.uav.com/wpmz/1.0.2'
 # ── Public API ─────────────────────────────────────────────────────────────
 
 def write_kmz(filepath, waypoints, drone_name, altitude_m, speed_ms,
-              finish_action_label, altitude_mode_label, interval_s,
-              gimbal_pitch=-90, mission_name='FlyPath Mission'):
+              finish_action_label, rc_lost_action_label, altitude_mode_label,
+              interval_s, gimbal_pitch=-90, mission_name='FlyPath Mission'):
     """
     Write a single DJI-compatible KMZ file.
 
@@ -81,12 +89,16 @@ def write_kmz(filepath, waypoints, drone_name, altitude_m, speed_ms,
     if not waypoints:
         raise ValueError('No waypoints provided — define a survey area first.')
 
-    drone_enum    = _DRONE_ENUM.get(drone_name, 68)
-    finish_action = _FINISH_ACTION.get(finish_action_label, 'goHome')
-    height_mode   = _HEIGHT_MODE.get(altitude_mode_label, 'relativeToStartPoint')
+    drone_enum             = _DRONE_ENUM.get(drone_name, 68)
+    finish_action          = _FINISH_ACTION.get(finish_action_label, 'goHome')
+    height_mode            = _HEIGHT_MODE.get(altitude_mode_label, 'relativeToStartPoint')
+    exit_on_rc_lost, rc_lost_action = _RC_LOST_ACTION.get(
+        rc_lost_action_label, ('executeLostAction', 'goBack')
+    )
     ts_ms         = int(time.time() * 1000)
 
-    mission_config = _mission_config_xml(drone_enum, finish_action, speed_ms)
+    mission_config = _mission_config_xml(drone_enum, finish_action, speed_ms,
+                                         exit_on_rc_lost, rc_lost_action)
     template_kml   = _build_template_kml(mission_config, ts_ms, mission_name,
                                          speed_ms, altitude_m, height_mode)
     waylines_wpml  = _build_waylines_wpml(
@@ -105,13 +117,14 @@ def write_kmz(filepath, waypoints, drone_name, altitude_m, speed_ms,
 
 # ── Shared mission config block ────────────────────────────────────────────
 
-def _mission_config_xml(drone_enum, finish_action, speed_ms):
+def _mission_config_xml(drone_enum, finish_action, speed_ms,
+                        exit_on_rc_lost, rc_lost_action):
     transitional_speed = min(speed_ms, 5.0)
     return f'''    <wpml:missionConfig>
       <wpml:flyToWaylineMode>safely</wpml:flyToWaylineMode>
       <wpml:finishAction>{finish_action}</wpml:finishAction>
-      <wpml:exitOnRCLost>executeLostAction</wpml:exitOnRCLost>
-      <wpml:executeRCLostAction>goBack</wpml:executeRCLostAction>
+      <wpml:exitOnRCLost>{exit_on_rc_lost}</wpml:exitOnRCLost>
+      <wpml:executeRCLostAction>{rc_lost_action}</wpml:executeRCLostAction>
       <wpml:globalTransitionalSpeed>{transitional_speed:.1f}</wpml:globalTransitionalSpeed>
       <wpml:droneInfo>
         <wpml:droneEnumValue>{drone_enum}</wpml:droneEnumValue>

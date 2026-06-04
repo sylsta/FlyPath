@@ -545,6 +545,15 @@ class FlyPathDialog(QWidget):
             'Land: lands immediately at the last waypoint.')
         form.addRow('Finish Action', self.finishActionCombo)
 
+        self.rcLostActionCombo = QComboBox()
+        self._tip(self.rcLostActionCombo,
+            'What the drone does if the RC signal is lost during the mission. '
+            'Return to Home: flies back to takeoff point. '
+            'Hover: holds position and waits for signal. '
+            'Land: lands immediately at current position. '
+            'Continue: keeps flying the mission regardless.')
+        form.addRow('RC Lost Action', self.rcLostActionCombo)
+
         return group
 
     def _build_stats_group(self):
@@ -657,6 +666,12 @@ class FlyPathDialog(QWidget):
             'Return to Home',
             'Hover in place',
             'Land at last waypoint',
+        ])
+        self.rcLostActionCombo.addItems([
+            'Return to Home',
+            'Hover in place',
+            'Land immediately',
+            'Continue mission',
         ])
         self._refresh_layer_combo()
 
@@ -1648,6 +1663,7 @@ class FlyPathDialog(QWidget):
                     altitude_m=self.altitudeSpin.value(),
                     speed_ms=self.speedSpin.value(),
                     finish_action_label=self.finishActionCombo.currentText(),
+                    rc_lost_action_label=self.rcLostActionCombo.currentText(),
                     altitude_mode_label=self.altitudeModeCombo.currentText(),
                     interval_s=self.photoIntervalSpin.value(),
                     gimbal_pitch=self.gimbalAngleSpin.value(),
