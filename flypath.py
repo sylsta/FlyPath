@@ -48,8 +48,9 @@ class FlyPath:
         if self.dock_widget:
             if self.panel:
                 self.panel.cleanup()
+            self.dock_widget.visibilityChanged.disconnect(self.action.setChecked)
             self.iface.mainWindow().removeDockWidget(self.dock_widget)
-            self.dock_widget.deleteLater()
+            self.dock_widget.setParent(None)
             self.dock_widget = None
 
     def toggle_panel(self, checked):
