@@ -240,37 +240,6 @@ FlyPath/
 
 ---
 
-## Changelog
-
-### v1.0.3
-- Changed survey area colour to deep pink (#FF1493) for higher map contrast
-- Changed flight path colour to electric yellow (#FFE600)
-- Start waypoint changed to red, start and end markers enlarged
-- Drawing tool rubber band and vertex markers now match the deep pink survey colour
-- Right-click now places the final vertex before finishing the polygon
-- Removed Set button — RC path saves automatically as you type
-
-### v1.0.2
-- Switched photo triggering to time-based interval (`multipleTiming`) — matches DJI Mini 4 Pro / Mini 3 Pro native auto interval capture
-- Added Photo Interval parameter (2.0–60.0 s)
-- Added Gimbal Angle control (−90° to −30°)
-- Front overlap is now a calculated read-only field with colour warnings
-- Added RC Lost Action to Safety Actions
-- Fixed speed not applying on DJI RC (was defaulting to 2.5 m/s)
-- Fixed export to local folders and external drives
-- Fixed duplicate dock widget warning on plugin reload
-- Max speed capped at 12 m/s
-- Removed manual Front Overlap, Altitude Mode, and Mission Name parameters
-
-### v1.0.1
-- Fixed TypeError on map preview for QGIS 3.38+
-- Fixed label placement enum error on QGIS 3.38+
-
-### v1.0.0
-- Initial stable release
-
----
-
 ## Contributing
 
 Contributions are welcome. To get started:
