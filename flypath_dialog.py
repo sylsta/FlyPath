@@ -187,12 +187,6 @@ QLabel#cameraInfoLabel { color: #7FB3E8; font-size: 10px; }
 QWidget#actionBar {
     border-top: 1px solid #3A3D45; background-color: #181B22;
 }
-QPushButton#rcPathBtn {
-    background-color: #3A3D45; color: #A0A8B8;
-    font-weight: normal; font-size: 10px; padding: 3px 6px;
-    border-radius: 3px;
-}
-QPushButton#rcPathBtn:hover { background-color: #4A4D55; }
 QPushButton#rcBrowseBtn {
     background-color: #2A3A4A; color: #7FB3E8;
     font-weight: normal; font-size: 10px; padding: 3px 6px;
@@ -623,14 +617,8 @@ class FlyPathDialog(QWidget):
             'Open File Explorer at "This PC" so you can navigate to the DJI RC, '
             'copy the waypoint folder path from the address bar, and paste it here.')
 
-        self.rcPathBtn = QPushButton('Set')
-        self.rcPathBtn.setObjectName('rcPathBtn')
-        self.rcPathBtn.setFixedWidth(36)
-        self._tip(self.rcPathBtn, 'Save the RC waypoint folder path.')
-
         rc_layout.addWidget(self.rcPathEdit)
         rc_layout.addWidget(self.rcBrowseBtn)
-        rc_layout.addWidget(self.rcPathBtn)
         layout.addWidget(rc_row)
 
         self.previewBtn = QPushButton('Preview on Map')
@@ -713,7 +701,7 @@ class FlyPathDialog(QWidget):
         self.featureCombo.currentIndexChanged.connect(self._on_feature_changed)
         self.useSelectionBtn.clicked.connect(self._on_use_qgis_selection)
         self.rcBrowseBtn.clicked.connect(self._on_browse_rc_path)
-        self.rcPathBtn.clicked.connect(self._on_save_rc_path)
+        self.rcPathEdit.textChanged.connect(self._on_rc_path_changed)
         self.drawPolygonBtn.clicked.connect(self._on_draw_polygon)
         self.removePolygonBtn.clicked.connect(self._on_remove_drawn_polygon)
         self.autoDirectionBtn.clicked.connect(self._on_auto_direction)
@@ -1439,24 +1427,8 @@ class FlyPathDialog(QWidget):
             '     RC path field, then click Set.'
         )
 
-    def _on_save_rc_path(self):
-        path = self.rcPathEdit.text().strip()
-        QSettings('FlyPath', 'FlyPath').setValue('rc_waypoint_dir', path)
-        if not path:
-            QMessageBox.information(self, 'RC Path Cleared',
-                                    'RC waypoint folder path has been cleared.')
-        elif os.path.isdir(path):
-            QMessageBox.information(self, 'RC Path Saved',
-                                    f'RC waypoint folder set to:\n{path}\n\n'
-                                    'FlyPath will auto-replace the latest mission on export.')
-        else:
-            # MTP/shell paths (e.g. "This PC\DJI RC 2\...") are not accessible
-            # via Python file I/O — save as reference only.
-            QMessageBox.information(self, 'RC Path Saved',
-                                    f'Path saved as reference:\n{path}\n\n'
-                                    'This looks like an MTP device path. On export, '
-                                    'FlyPath will save a KMZ to your PC and remind '
-                                    'you to copy it to the RC manually.')
+    def _on_rc_path_changed(self, text):
+        QSettings('FlyPath', 'FlyPath').setValue('rc_waypoint_dir', text.strip())
 
     # DJI mission UUID folder format: 8-4-4-4-12 hex characters
     _UUID_RE = re.compile(
