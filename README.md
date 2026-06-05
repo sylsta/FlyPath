@@ -25,7 +25,7 @@ Developed and maintained by [Dronnix](https://www.dronnix.com), a drone mapping 
 - Draw the survey area directly on the QGIS map canvas using a native polygon drawing tool
 - Import a survey area from any polygon layer or active QGIS selection
 - Configurable flight altitude, speed, gimbal angle, photo interval, side overlap, and flight direction
-- Time-based interval photo triggering (`multipleTiming`), matching DJI Mini 4 Pro and Mini 3 Pro native auto interval capture
+- Photo Interval parameter for planning along-track overlap, used as a reference to set the drone's auto interval capture mode manually before flying
 - Calculated front overlap display, showing effective along-track overlap from speed x interval with low-overlap warnings
 - Auto-optimised flight direction based on survey area geometry
 - Live GSD and effective photo spacing, synced to drone model, altitude, speed, and interval
@@ -121,6 +121,8 @@ Only one polygon can be active at a time. Switching methods automatically remove
 | Front Overlap | Calculated: effective along-track overlap percentage, turns red if too low |
 
 > **Note:** Front overlap is a derived value, not a manual input. Adjust speed or interval to control it.
+
+> **Important - Photo triggering on DJI Mini 4 Pro and Mini 3 Pro:** DJI consumer drones do not support WPML-based camera auto-triggering. Before starting the mission, manually enable auto interval capture mode on the drone and set it to match the Photo Interval value shown in FlyPath. The Photo Interval parameter is a planning reference that lets you estimate front overlap and tune your speed and altitude accordingly.
 
 #### Safety Actions
 
