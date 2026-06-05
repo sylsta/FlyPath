@@ -1302,7 +1302,7 @@ class FlyPathDialog(QWidget):
         dp.addFeatures([feat])
 
         line_sym = QgsLineSymbol.createSimple({
-            'color': '#F0A500', 'width': '0.8',
+            'color': '#FFE600', 'width': '0.8',
             'capstyle': 'round', 'joinstyle': 'round',
         })
         line_layer.renderer().setSymbol(line_sym)
@@ -1335,7 +1335,7 @@ class FlyPathDialog(QWidget):
         for expr, color, border, size, label in [
             ('"wp_type" = \'start\'', '#CC2222', 'white',   '7.5', 'Start'),
             ('"wp_type" = \'end\'',   '#2D6DB5', 'white',   '7.5', 'End'),
-            ('"wp_type" = \'mid\'',   'white',   '#F0A500', '4.0', 'Waypoint'),
+            ('"wp_type" = \'mid\'',   'white',   '#FFE600', '4.0', 'Waypoint'),
         ]:
             sym = QgsMarkerSymbol.createSimple({
                 'name': 'circle', 'color': color,
