@@ -135,10 +135,10 @@ GSD, shot spacing, and front overlap update live as you adjust parameters.
 
 Click **Preview on Map** to generate the flight grid and display it on the canvas:
 
-- **Blue polygon** — survey area boundary
-- **Orange lines** — flight path connecting all waypoints
-- **Orange circles** — mid-waypoints
-- **Orange filled circle** — start waypoint
+- **Deep pink polygon** — survey area boundary
+- **Electric yellow lines** — flight path connecting all waypoints
+- **Electric yellow circles** — mid-waypoints
+- **Red filled circle** — start waypoint
 - **Blue filled circle** — end waypoint
 
 Flight statistics (area, distance, photos, batteries, flight time) update below the parameters.
@@ -164,7 +164,7 @@ This workflow replaces a mission directly on the DJI RC2 via USB — no manual c
 1. Click **Browse…** next to the RC path field — File Explorer opens at *This PC*
 2. Navigate to: `DJI RC 2 › Internal shared storage › Android › data › dji.go.v5 › files › waypoint`
 3. Click the address bar to reveal the full path, copy it (Ctrl+C)
-4. Paste it into the RC path field in FlyPath and click **Set**
+4. Paste it into the RC path field in FlyPath — the path saves automatically
 
 **Exporting:**
 
@@ -241,6 +241,14 @@ FlyPath/
 ---
 
 ## Changelog
+
+### v1.0.3
+- Changed survey area colour to deep pink (#FF1493) for higher map contrast
+- Changed flight path colour to electric yellow (#FFE600)
+- Start waypoint changed to red, start and end markers enlarged
+- Drawing tool rubber band and vertex markers now match the deep pink survey colour
+- Right-click now places the final vertex before finishing the polygon
+- Removed Set button — RC path saves automatically as you type
 
 ### v1.0.2
 - Switched photo triggering to time-based interval (`multipleTiming`) — matches DJI Mini 4 Pro / Mini 3 Pro native auto interval capture
