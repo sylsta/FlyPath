@@ -75,6 +75,9 @@ class PolygonDrawTool(QgsMapTool):
             self._add_marker(pt)
             self._redraw(self._cursor)
         elif event.button() == Qt.RightButton:
+            pt = self._snap(event.pos())
+            self._points.append(pt)
+            self._add_marker(pt)
             self._finish()
 
     def canvasDoubleClickEvent(self, event):
