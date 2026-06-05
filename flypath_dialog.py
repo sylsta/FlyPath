@@ -1098,7 +1098,7 @@ class FlyPathDialog(QWidget):
         layer.dataProvider().addFeatures([feat])
 
         symbol = QgsFillSymbol.createSimple({
-            'color': '255,20,147,120',
+            'color': '255,20,147,85',
             'outline_color': '#FF1493',
             'outline_width': '0.8',
             'outline_style': 'dash',
