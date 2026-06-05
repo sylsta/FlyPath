@@ -24,12 +24,16 @@ Developed and maintained by [Dronnix](https://www.dronnix.com) — a drone mappi
 
 - Draw the survey area directly on the QGIS map canvas using a native polygon drawing tool
 - Import a survey area from any polygon layer or active QGIS selection
-- Configurable flight altitude, speed, front overlap, side overlap, and flight direction
+- Configurable flight altitude, speed, gimbal angle, photo interval, side overlap, and flight direction
+- Time-based interval photo triggering (`multipleTiming`) — matches DJI Mini 4 Pro and Mini 3 Pro native auto interval capture
+- Calculated front overlap display — shows effective along-track overlap from speed × interval with low-overlap warnings
 - Auto-optimised flight direction based on survey area geometry
-- Live GSD (Ground Sampling Distance) and photo interval preview — synced to drone model and altitude
+- Live GSD and effective photo spacing — synced to drone model, altitude, speed, and interval
 - Flight statistics: area, path distance, waypoint count, photo count, estimated batteries, and flight time
+- Configurable safety actions: finish action and RC lost action
 - Exports native DJI WPML KMZ — compatible with DJI Fly on DJI RC2
 - **Direct RC export**: set the RC waypoint folder path once — FlyPath automatically finds and replaces the latest mission on the controller via USB
+- **Local folder export**: set any local or external drive path — FlyPath saves directly to that folder
 - Contextual info bar — hover over any parameter to see what it does
 - Dark-themed dock panel — designed to complement the QGIS interface
 
@@ -95,19 +99,37 @@ Only one polygon can be active at a time. Switching methods automatically remove
 
 ### Step 2 — Configure flight parameters
 
+#### Flight Parameters
+
 | Parameter | Description |
 |---|---|
-| Drone Model | Sets camera specs used for GSD and interval calculations |
-| Mission Name | Embedded in the KMZ and used as the default export filename |
-| Altitude | Flight altitude in metres (AGL or MSL) |
-| Speed | Waypoint flight speed in m/s |
-| Front Overlap | Along-track photo overlap percentage |
-| Side Overlap | Cross-track strip spacing overlap percentage |
-| Flight Direction | Angle of flight lines — or click **Auto** to optimise for the survey shape |
-| Finish Action | What the drone does after the last waypoint |
-| Altitude Mode | AGL (relative to takeoff point) or MSL (absolute WGS84) |
+| Drone Model | Sets camera specs used for GSD and spacing calculations |
+| Altitude | Flight altitude above ground level (AGL) in metres |
+| GSD | Calculated ground sampling distance — updates live with altitude |
+| Side Overlap | Cross-track strip spacing overlap — controls distance between flight lines |
+| Speed | Waypoint flight speed in m/s (max 12 m/s) |
+| Direction | Angle of flight lines — or click **Auto** to optimise for the survey shape |
+| Margin | Buffer added around the survey polygon boundary in metres |
 
-GSD and photo interval update live as you adjust altitude and overlap.
+#### Camera Settings
+
+| Parameter | Description |
+|---|---|
+| Gimbal Angle | Camera tilt: −90° points straight down (nadir) for 2D mapping |
+| Photo Interval | Time between photos in seconds (minimum 2 s at 12 MP JPEG) |
+| Shot Spacing | Calculated: speed × interval in metres — updates live |
+| Front Overlap | Calculated: effective along-track overlap percentage — turns red if too low |
+
+> **Note:** Front overlap is a derived value, not a manual input. Adjust speed or interval to control it.
+
+#### Safety Actions
+
+| Parameter | Description |
+|---|---|
+| Finish Action | What the drone does after the last waypoint (Return to Home / Hover / Land) |
+| RC Lost Action | What the drone does if RC signal is lost (Return to Home / Hover / Land / Continue) |
+
+GSD, shot spacing, and front overlap update live as you adjust parameters.
 
 ### Step 3 — Preview on Map
 
@@ -125,7 +147,7 @@ Flight statistics (area, distance, photos, batteries, flight time) update below 
 
 ### Step 4 — Export KMZ
 
-FlyPath supports two export workflows:
+FlyPath supports three export workflows depending on the RC path field:
 
 ---
 
@@ -153,18 +175,29 @@ This workflow replaces a mission directly on the DJI RC2 via USB — no manual c
 
 ---
 
-#### Workflow B — Manual Export
+#### Workflow B — Local Folder Export
 
-Use this workflow when the RC is not connected, or when you prefer to manage files manually.
+Use this workflow to save the KMZ to a specific folder on your PC or an external drive.
 
-1. Click **Export KMZ** — a standard save dialog opens
-2. Choose a destination and filename on your PC
-3. Connect your DJI RC2 via USB
-4. In File Explorer, navigate to the RC's waypoint folder:
+1. Paste any local folder path (e.g. `F:\missions`) into the RC path field and click **Set**
+2. Click **Export KMZ** — FlyPath saves `FlyPath_Mission.kmz` directly to that folder
+3. If the folder does not exist, FlyPath will offer to create it
+
+---
+
+#### Workflow C — Manual Export
+
+Use this workflow when no path is configured, or when you prefer to manage files manually.
+
+1. Leave the RC path field empty
+2. Click **Export KMZ** — a standard save dialog opens
+3. Choose a destination and filename on your PC
+4. Connect your DJI RC2 via USB
+5. In File Explorer, navigate to the RC's waypoint folder:
    `This PC › DJI RC 2 › Internal shared storage › Android › data › dji.go.v5 › files › waypoint`
-5. Open the UUID folder of an existing mission (created by DJI Fly)
-6. Copy the exported KMZ into that folder and rename it to `<UUID>.kmz` — matching the folder name exactly
-7. Disconnect the RC, close and reopen DJI Fly — the mission will appear updated
+6. Open the UUID folder of an existing mission (created by DJI Fly)
+7. Copy the exported KMZ into that folder and rename it to `<UUID>.kmz` — matching the folder name exactly
+8. Disconnect the RC, close and reopen DJI Fly — the mission will appear updated
 
 ---
 
@@ -204,6 +237,29 @@ FlyPath/
 - DJI Mini 3 Pro droneEnumValue (`97`) is community-verified — not confirmed from a native mission file
 - 2D grid missions only — no terrain following, 3D facade, or orbit missions
 - No automatic multi-battery mission splitting
+
+---
+
+## Changelog
+
+### v1.0.2
+- Switched photo triggering to time-based interval (`multipleTiming`) — matches DJI Mini 4 Pro / Mini 3 Pro native auto interval capture
+- Added Photo Interval parameter (2.0–60.0 s)
+- Added Gimbal Angle control (−90° to −30°)
+- Front overlap is now a calculated read-only field with colour warnings
+- Added RC Lost Action to Safety Actions
+- Fixed speed not applying on DJI RC (was defaulting to 2.5 m/s)
+- Fixed export to local folders and external drives
+- Fixed duplicate dock widget warning on plugin reload
+- Max speed capped at 12 m/s
+- Removed manual Front Overlap, Altitude Mode, and Mission Name parameters
+
+### v1.0.1
+- Fixed TypeError on map preview for QGIS 3.38+
+- Fixed label placement enum error on QGIS 3.38+
+
+### v1.0.0
+- Initial stable release
 
 ---
 
