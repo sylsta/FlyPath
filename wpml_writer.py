@@ -54,7 +54,7 @@ _NS = 'http://www.uav.com/wpmz/1.0.2'
 
 def write_kmz(filepath, waypoints, drone_name, altitude_m, speed_ms,
               finish_action_label, rc_lost_action_label,
-              interval_s, gimbal_pitch=-90, mission_name='FlyPath Mission'):
+              gimbal_pitch=-90, mission_name='FlyPath Mission'):
     """
     Write a single DJI-compatible KMZ file.
 
@@ -98,7 +98,7 @@ def write_kmz(filepath, waypoints, drone_name, altitude_m, speed_ms,
                                          speed_ms, altitude_m, height_mode)
     waylines_wpml  = _build_waylines_wpml(
         waypoints, altitude_m, speed_ms, height_mode,
-        interval_s, gimbal_pitch, mission_config
+        gimbal_pitch, mission_config
     )
 
     buf = io.BytesIO()
@@ -160,20 +160,13 @@ def _build_template_kml(mission_config, ts_ms, mission_name,
 
 
 def _build_waylines_wpml(waypoints, altitude_m, speed_ms, height_mode,
-                          interval_s, gimbal_pitch, mission_config):
+                          gimbal_pitch, mission_config):
     """waylines.wpml — repeats missionConfig + full Placemark list."""
-    last_idx = len(waypoints) - 1
     placemark_blocks = []
 
     for idx, (lon, lat) in enumerate(waypoints):
         if idx == 0:
-            action_groups = (
-                _gimbal_action_group(group_id=1, pitch_angle=gimbal_pitch) +
-                _timing_photo_group(group_id=2,
-                                    start_idx=0,
-                                    end_idx=last_idx,
-                                    interval_s=interval_s)
-            )
+            action_groups = _gimbal_action_group(group_id=1, pitch_angle=gimbal_pitch)
         else:
             action_groups = ''
         placemark_blocks.append(
@@ -265,28 +258,6 @@ def _gimbal_action_group(group_id, pitch_angle=-90):
         </wpml:actionGroup>
 '''
 
-
-def _timing_photo_group(group_id, start_idx, end_idx, interval_s):
-    """Fire camera every interval_s seconds along the route."""
-    return f'''        <wpml:actionGroup>
-          <wpml:actionGroupId>{group_id}</wpml:actionGroupId>
-          <wpml:actionGroupStartIndex>{start_idx}</wpml:actionGroupStartIndex>
-          <wpml:actionGroupEndIndex>{end_idx}</wpml:actionGroupEndIndex>
-          <wpml:actionGroupMode>parallel</wpml:actionGroupMode>
-          <wpml:actionTrigger>
-            <wpml:actionTriggerType>multipleTiming</wpml:actionTriggerType>
-            <wpml:actionTriggerParam>{interval_s:.1f}</wpml:actionTriggerParam>
-          </wpml:actionTrigger>
-          <wpml:action>
-            <wpml:actionId>2</wpml:actionId>
-            <wpml:actionActuatorFunc>takePhoto</wpml:actionActuatorFunc>
-            <wpml:actionActuatorFuncParam>
-              <wpml:fileSuffix>flypath</wpml:fileSuffix>
-              <wpml:payloadPositionIndex>0</wpml:payloadPositionIndex>
-            </wpml:actionActuatorFuncParam>
-          </wpml:action>
-        </wpml:actionGroup>
-'''
 
 
 # ── Utilities ──────────────────────────────────────────────────────────────
