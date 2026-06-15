@@ -3,6 +3,21 @@ from qgis.PyQt.QtGui import QColor
 from qgis.gui import QgsMapTool, QgsRubberBand, QgsVertexMarker
 from qgis.core import QgsWkbTypes, QgsGeometry, QgsPointXY
 
+try:
+    _DashLine     = Qt.PenStyle.DashLine
+    _LeftButton   = Qt.MouseButton.LeftButton
+    _RightButton  = Qt.MouseButton.RightButton
+    _Key_Escape   = Qt.Key.Key_Escape
+    _Key_Backspace = Qt.Key.Key_Backspace
+    _Key_Delete   = Qt.Key.Key_Delete
+except AttributeError:
+    _DashLine     = Qt.DashLine
+    _LeftButton   = Qt.LeftButton
+    _RightButton  = Qt.RightButton
+    _Key_Escape   = Qt.Key_Escape
+    _Key_Backspace = Qt.Key_Backspace
+    _Key_Delete   = Qt.Key_Delete
+
 
 class PolygonDrawTool(QgsMapTool):
     """
@@ -37,7 +52,7 @@ class PolygonDrawTool(QgsMapTool):
         self._band.setColor(QColor(255, 20, 147, 80))         # deep pink semi-fill
         self._band.setStrokeColor(QColor(255, 20, 147, 220))
         self._band.setWidth(2)
-        self._band.setLineStyle(Qt.DashLine)
+        self._band.setLineStyle(_DashLine)
 
     # ── Snapping ──────────────────────────────────────────────────────────
 
@@ -69,12 +84,12 @@ class PolygonDrawTool(QgsMapTool):
         self._redraw(self._cursor)
 
     def canvasPressEvent(self, event):
-        if event.button() == Qt.LeftButton:
+        if event.button() == _LeftButton:
             pt = self._snap(event.pos())
             self._points.append(pt)
             self._add_marker(pt)
             self._redraw(self._cursor)
-        elif event.button() == Qt.RightButton:
+        elif event.button() == _RightButton:
             pt = self._snap(event.pos())
             self._points.append(pt)
             self._add_marker(pt)
@@ -89,10 +104,10 @@ class PolygonDrawTool(QgsMapTool):
 
     def keyPressEvent(self, event):
         key = event.key()
-        if key == Qt.Key_Escape:
+        if key == _Key_Escape:
             self._reset()
             self.drawing_cancelled.emit()
-        elif key in (Qt.Key_Backspace, Qt.Key_Delete):
+        elif key in (_Key_Backspace, _Key_Delete):
             self._undo_last()
 
     # ── Vertex markers ────────────────────────────────────────────────────

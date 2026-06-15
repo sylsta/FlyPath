@@ -15,6 +15,19 @@ from qgis.PyQt.QtWidgets import (
 from qgis.PyQt.QtCore import Qt, QObject, QEvent, QSettings, QVariant
 from qgis.PyQt.QtGui import QColor, QFont
 
+try:
+    _AlignLeft    = Qt.AlignmentFlag.AlignLeft
+    _AlignVCenter = Qt.AlignmentFlag.AlignVCenter
+    _EventEnter   = QEvent.Type.Enter
+    _EventLeave   = QEvent.Type.Leave
+    _FrameNoFrame = QFrame.Shape.NoFrame
+except AttributeError:
+    _AlignLeft    = Qt.AlignLeft
+    _AlignVCenter = Qt.AlignVCenter
+    _EventEnter   = QEvent.Enter
+    _EventLeave   = QEvent.Leave
+    _FrameNoFrame = QFrame.NoFrame
+
 from qgis.core import (
     Qgis,
     QgsProject,
@@ -223,13 +236,13 @@ class _HoverFilter(QObject):
         self._text  = text
 
     def eventFilter(self, obj, event):
-        if event.type() == QEvent.Enter:
+        if event.type() == _EventEnter:
             self._label.setObjectName('infoBar')
             self._label.setStyleSheet('')   # re-apply via object name
             self._label.setText('ⓘ  ' + self._text)
             self._label.style().unpolish(self._label)
             self._label.style().polish(self._label)
-        elif event.type() == QEvent.Leave:
+        elif event.type() == _EventLeave:
             self._label.setObjectName('infoBarIdle')
             self._label.setStyleSheet('')
             self._label.setText(_INFO_IDLE)
@@ -291,7 +304,7 @@ class FlyPathDialog(QWidget):
         # Scrollable form area
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setFrameShape(_FrameNoFrame)
 
         content = QWidget()
         scroll_layout = QVBoxLayout(content)
@@ -320,7 +333,7 @@ class FlyPathDialog(QWidget):
     def _build_mission_group(self):
         group = QGroupBox('Mission Setup')
         form  = QFormLayout(group)
-        form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        form.setLabelAlignment(_AlignLeft | _AlignVCenter)
         form.setSpacing(6)
 
         self.droneModelCombo = QComboBox()
@@ -341,7 +354,7 @@ class FlyPathDialog(QWidget):
     def _build_area_group(self):
         group = QGroupBox('Survey Area')
         form  = QFormLayout(group)
-        form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        form.setLabelAlignment(_AlignLeft | _AlignVCenter)
         form.setSpacing(6)
 
         self.layerCombo = QComboBox()
@@ -399,7 +412,7 @@ class FlyPathDialog(QWidget):
     def _build_flight_group(self):
         group = QGroupBox('Flight Parameters')
         form  = QFormLayout(group)
-        form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        form.setLabelAlignment(_AlignLeft | _AlignVCenter)
         form.setSpacing(6)
 
         self.altitudeSpin = QDoubleSpinBox()
@@ -489,7 +502,7 @@ class FlyPathDialog(QWidget):
     def _build_camera_group(self):
         group = QGroupBox('Camera Settings')
         form  = QFormLayout(group)
-        form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        form.setLabelAlignment(_AlignLeft | _AlignVCenter)
         form.setSpacing(6)
 
         self.gimbalAngleSpin = QSpinBox()
@@ -535,7 +548,7 @@ class FlyPathDialog(QWidget):
     def _build_advanced_group(self):
         group = QGroupBox('Safety Actions')
         form  = QFormLayout(group)
-        form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        form.setLabelAlignment(_AlignLeft | _AlignVCenter)
         form.setSpacing(6)
 
         self.finishActionCombo = QComboBox()
@@ -560,7 +573,7 @@ class FlyPathDialog(QWidget):
     def _build_stats_group(self):
         group = QGroupBox('Statistics')
         form  = QFormLayout(group)
-        form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        form.setLabelAlignment(_AlignLeft | _AlignVCenter)
         form.setSpacing(6)
 
         stats = [

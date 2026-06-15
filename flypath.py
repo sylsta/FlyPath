@@ -6,6 +6,13 @@ from qgis.PyQt.QtCore import Qt
 
 from .flypath_dialog import FlyPathDialog
 
+try:
+    _DockLeft  = Qt.DockWidgetArea.LeftDockWidgetArea
+    _DockRight = Qt.DockWidgetArea.RightDockWidgetArea
+except AttributeError:
+    _DockLeft  = Qt.LeftDockWidgetArea
+    _DockRight = Qt.RightDockWidgetArea
+
 
 class FlyPath:
 
@@ -29,7 +36,7 @@ class FlyPath:
         self.dock_widget = QDockWidget('FlyPath', self.iface.mainWindow())
         self.dock_widget.setObjectName('FlyPathDock')
         self.dock_widget.setAllowedAreas(
-            Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea
+            _DockLeft | _DockRight
         )
         self.dock_widget.setMinimumWidth(300)
 
@@ -37,7 +44,7 @@ class FlyPath:
         self.dock_widget.setWidget(self.panel)
 
         self.iface.mainWindow().addDockWidget(
-            Qt.RightDockWidgetArea, self.dock_widget
+            _DockRight, self.dock_widget
         )
         self.dock_widget.hide()
         self.dock_widget.visibilityChanged.connect(self.action.setChecked)
