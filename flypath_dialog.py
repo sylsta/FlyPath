@@ -1553,7 +1553,6 @@ class FlyPathDialog(QWidget):
                 speed_ms=self.speedSpin.value(),
                 finish_action_label=self.finishActionCombo.currentText(),
                 rc_lost_action_label=self.rcLostActionCombo.currentText(),
-                interval_s=self.photoIntervalSpin.value(),
                 gimbal_pitch=self.gimbalAngleSpin.value(),
                 mission_name=mission,
             )
