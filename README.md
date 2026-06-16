@@ -44,9 +44,9 @@ Developed and maintained by [Dronnix](https://www.dronnix.com), a drone mapping 
 | Requirement | Details |
 |---|---|
 | Operating System | Windows 10 / 11 |
-| QGIS | 3.16 or later |
+| QGIS | 3.16 or later (4.x supported) |
 | Python | 3.9+ (bundled with QGIS) |
-| Drone | DJI Mini 3 Pro or DJI Mini 4 Pro |
+| Drone | DJI Mini 3 Pro, Mini 4 Pro, or Mini 5 Pro |
 | Controller | DJI RC2 (for direct USB export) |
 
 > Linux and macOS support is planned for a future release.
@@ -55,13 +55,18 @@ Developed and maintained by [Dronnix](https://www.dronnix.com), a drone mapping 
 
 ## Installation
 
-### Option A - Install from ZIP *(recommended for now)*
+### Option A - QGIS Plugin Manager *(recommended)*
+
+1. In QGIS go to **Plugins > Manage and Install Plugins**
+2. Search for **FlyPath** and click **Install Plugin**
+
+### Option B - Install from ZIP
 
 1. Download the latest `FlyPath.zip` from the [Releases](https://github.com/dronnix-io/FlyPath/releases) page
 2. In QGIS go to **Plugins > Manage and Install Plugins > Install from ZIP**
 3. Select the downloaded ZIP and click **Install Plugin**
 
-### Option B - Build from source
+### Option C - Build from source
 
 ```shell
 git clone https://github.com/dronnix-io/FlyPath.git
@@ -107,7 +112,7 @@ Only one polygon can be active at a time. Switching methods automatically remove
 | Altitude | Flight altitude above ground level (AGL) in metres |
 | GSD | Calculated ground sampling distance, updates live with altitude |
 | Side Overlap | Cross-track strip spacing overlap, controls distance between flight lines |
-| Speed | Waypoint flight speed in m/s (max 12 m/s) |
+| Speed | Waypoint flight speed in m/s (max varies by drone model) |
 | Direction | Angle of flight lines, or click **Auto** to optimise for the survey shape |
 | Margin | Buffer added around the survey polygon boundary in metres |
 
@@ -122,7 +127,7 @@ Only one polygon can be active at a time. Switching methods automatically remove
 
 > **Note:** Front overlap is a derived value, not a manual input. Adjust speed or interval to control it.
 
-> **Important - Photo triggering on DJI Mini 4 Pro and Mini 3 Pro:** DJI consumer drones do not support WPML-based camera auto-triggering. Before starting the mission, manually enable auto interval capture mode on the drone and set it to match the Photo Interval value shown in FlyPath. The Photo Interval parameter is a planning reference that lets you estimate front overlap and tune your speed and altitude accordingly.
+> **Important - Photo triggering on DJI Mini 3 Pro, Mini 4 Pro, and Mini 5 Pro:** DJI consumer drones do not support WPML-based camera auto-triggering. Before starting the mission, manually enable auto interval capture mode on the drone and set it to match the Photo Interval value shown in FlyPath. The Photo Interval parameter is a planning reference that lets you estimate front overlap and tune your speed and altitude accordingly.
 
 #### Safety Actions
 
@@ -209,6 +214,7 @@ Use this workflow when no path is configured, or when you prefer to manage files
 |---|---|---|---|
 | DJI Mini 3 Pro | Yes | 97 | Community-verified |
 | DJI Mini 4 Pro | Yes | 68 | Verified from native RC2 mission dump |
+| DJI Mini 5 Pro | Yes | 68 | Community-verified |
 
 > **Note:** DJI Mini 3 (standard) does **not** support waypoint missions and is not supported by FlyPath.
 
