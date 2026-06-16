@@ -81,6 +81,21 @@ DRONE_SPECS = {
         'battery_time_min': 34,
         'info': '1/1.3" CMOS  ·  12 MP  ·  24 mm equiv',
     },
+    # Sensor dimensions use the standard Sony 1" format (13.2 × 8.8 mm).
+    # Focal length derived from 24 mm equiv on a 1" sensor (crop factor ≈ 2.73).
+    # Verify sensor_width_mm / focal_length_mm against official DJI EXIF data
+    # if precision better than ~2% is needed for GSD calculations.
+    # Drone enum (68) and mission compatibility community-verified on DJI RC2.
+    'DJI Mini 5 Pro': {
+        'sensor_width_mm':  13.2,
+        'sensor_height_mm':  8.8,
+        'focal_length_mm':   8.8,
+        'image_width_px':   8192,
+        'image_height_px':  6144,
+        'max_speed_ms':     15.0,
+        'battery_time_min':  45,
+        'info': '1" CMOS  ·  50 MP  ·  24 mm equiv',
+    },
 }
 
 # ── Dark stylesheet (Litchi-inspired) ─────────────────────────────────────
