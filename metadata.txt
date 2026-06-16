@@ -3,7 +3,7 @@ name=FlyPath
 qgisMinimumVersion=3.16
 qgisMaximumVersion=4.99
 description=Generate DJI WPML KMZ mission files for 2D orthomosaic mapping directly from QGIS
-version=1.0.4
+version=1.1.0
 author=Salar Ghaffarian
 email=salar@dronnix.com
 
