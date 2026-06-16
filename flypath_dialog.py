@@ -21,12 +21,14 @@ try:
     _EventEnter   = QEvent.Type.Enter
     _EventLeave   = QEvent.Type.Leave
     _FrameNoFrame = QFrame.Shape.NoFrame
+    _FontBold     = QFont.Weight.Bold
 except AttributeError:
     _AlignLeft    = Qt.AlignLeft
     _AlignVCenter = Qt.AlignVCenter
     _EventEnter   = QEvent.Enter
     _EventLeave   = QEvent.Leave
     _FrameNoFrame = QFrame.NoFrame
+    _FontBold     = QFont.Bold
 
 from qgis.core import (
     Qgis,
@@ -50,6 +52,12 @@ from .map_tools import PolygonDrawTool
 from .grid_planner import generate_flight_grid, find_optimal_direction
 from .wpml_writer import write_kmz
 
+
+# ── MTP PowerShell exit codes ─────────────────────────────────────────────
+_MTP_EXIT_NAV_FAIL      = 1   # could not navigate path to waypoint folder
+_MTP_EXIT_NO_UUID       = 2   # no UUID mission folder found in waypoint folder
+_MTP_EXIT_UUID_MISSING  = 3   # UUID folder gone between script 1 and script 2
+_MTP_EXIT_UUID_NO_OPEN  = 4   # UUID folder exists but GetFolder returned None
 
 # ── Drone / camera specifications ─────────────────────────────────────────
 DRONE_SPECS = {
@@ -226,6 +234,11 @@ QLabel#infoBarIdle {
 
 
 _INFO_IDLE = 'ⓘ  Hover over any field to see what it does.'
+
+# ── Map preview colour constants ───────────────────────────────────────────
+_COLOR_START_MARKER  = '#CC2222'   # red filled circle — first waypoint
+_COLOR_END_MARKER    = '#2D6DB5'   # blue filled circle — last waypoint
+_COLOR_MID_MARKER    = 'white'     # white circle — intermediate waypoints
 
 class _HoverFilter(QObject):
     """Event filter that writes a hint to a shared info label on mouse enter/leave."""
@@ -969,8 +982,8 @@ class FlyPathDialog(QWidget):
                 layer.featuresDeleted.disconnect(self._on_layer_features_changed)
                 layer.editingStopped.disconnect(self._on_layer_features_changed)
                 layer.attributeValueChanged.disconnect(self._on_layer_features_changed)
-            except Exception:
-                pass
+            except RuntimeError:
+                pass  # signals already disconnected — safe to ignore
         self._monitored_layer_id = None
 
     def _on_layer_features_changed(self, *_args):
@@ -1288,48 +1301,47 @@ class FlyPathDialog(QWidget):
         if not self._has_survey_area():
             return
         result = self._generate_waypoints()
-        if not result:
-            QMessageBox.warning(
-                self, 'No Waypoints',
-                'The grid produced no waypoints.\n'
-                'Try increasing the survey area or reducing overlap values.'
-            )
+        if result is None:
             return
         waypoints, shot_spacing_m = result
         self._waypoints      = waypoints
         self._shot_spacing_m = shot_spacing_m
         self._on_clear_preview(reset_area=False)
+        line_layer = self._build_path_layer(waypoints)
+        wp_layer   = self._build_waypoints_layer(waypoints)
+        self._preview_layer_ids = [line_layer.id(), wp_layer.id()]
+        self.iface.mapCanvas().refresh()
 
-        # ── 1. Flight path line ───────────────────────────────────────────
-        line_layer = QgsVectorLayer(
+    def _build_path_layer(self, waypoints):
+        """Create and register a yellow LineString layer for the flight path."""
+        layer = QgsVectorLayer(
             'LineString?crs=EPSG:4326&field=id:integer',
             'FlyPath — Path', 'memory'
         )
-        line_layer.setCustomProperty('flypath_internal', True)
-        dp   = line_layer.dataProvider()
+        layer.setCustomProperty('flypath_internal', True)
         feat = QgsFeature()
         feat.setGeometry(QgsGeometry.fromPolylineXY(
             [QgsPointXY(lon, lat) for lon, lat in waypoints]
         ))
         feat.setAttributes([0])
-        dp.addFeatures([feat])
-
-        line_sym = QgsLineSymbol.createSimple({
+        layer.dataProvider().addFeatures([feat])
+        layer.renderer().setSymbol(QgsLineSymbol.createSimple({
             'color': '#FFE600', 'width': '0.8',
             'capstyle': 'round', 'joinstyle': 'round',
-        })
-        line_layer.renderer().setSymbol(line_sym)
-        QgsProject.instance().addMapLayer(line_layer)
+        }))
+        QgsProject.instance().addMapLayer(layer)
+        return layer
 
-        # ── 2. Waypoint markers ───────────────────────────────────────────
-        wp_layer = QgsVectorLayer(
+    def _build_waypoints_layer(self, waypoints):
+        """Create and register a rule-based Point layer for waypoint markers."""
+        layer = QgsVectorLayer(
             'Point?crs=EPSG:4326&field=seq:integer&field=wp_type:string(10)',
             'FlyPath — Waypoints', 'memory'
         )
-        wp_layer.setCustomProperty('flypath_internal', True)
-        dp2      = wp_layer.dataProvider()
-        last_idx = len(waypoints) - 1
-        wp_feats = []
+        layer.setCustomProperty('flypath_internal', True)
+
+        last_idx  = len(waypoints) - 1
+        wp_feats  = []
         for i, (lon, lat) in enumerate(waypoints):
             f = QgsFeature()
             f.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(lon, lat)))
@@ -1341,43 +1353,39 @@ class FlyPathDialog(QWidget):
                 wp_type = 'mid'
             f.setAttributes([i + 1, wp_type])
             wp_feats.append(f)
-        dp2.addFeatures(wp_feats)
+        layer.dataProvider().addFeatures(wp_feats)
 
-        # Rule-based renderer: start=red, end=blue, mid=white
         root = QgsRuleBasedRenderer.Rule(None)
         for expr, color, border, size, label in [
-            ('"wp_type" = \'start\'', '#CC2222', 'white',   '7.5', 'Start'),
-            ('"wp_type" = \'end\'',   '#2D6DB5', 'white',   '7.5', 'End'),
-            ('"wp_type" = \'mid\'',   'white',   '#FFE600', '4.0', 'Waypoint'),
+            ('"wp_type" = \'start\'', _COLOR_START_MARKER, _COLOR_MID_MARKER, '7.5', 'Start'),
+            ('"wp_type" = \'end\'',   _COLOR_END_MARKER,   _COLOR_MID_MARKER, '7.5', 'End'),
+            ('"wp_type" = \'mid\'',   _COLOR_MID_MARKER,   '#FFE600',         '4.0', 'Waypoint'),
         ]:
             sym = QgsMarkerSymbol.createSimple({
                 'name': 'circle', 'color': color,
                 'outline_color': border, 'outline_width': '0.4',
                 'size': size,
             })
-            rule = QgsRuleBasedRenderer.Rule(sym, filterExp=expr, label=label)
-            root.appendChild(rule)
-        wp_layer.setRenderer(QgsRuleBasedRenderer(root))
+            root.appendChild(QgsRuleBasedRenderer.Rule(sym, filterExp=expr, label=label))
+        layer.setRenderer(QgsRuleBasedRenderer(root))
 
-        # Labels: sequence number centred on each marker
         lbl = QgsPalLayerSettings()
-        lbl.fieldName  = 'seq'
+        lbl.fieldName = 'seq'
         try:
-            lbl.placement = Qgis.LabelPlacement.OverPoint   # QGIS 3.38+
+            lbl.placement = Qgis.LabelPlacement.OverPoint
         except AttributeError:
-            lbl.placement = QgsPalLayerSettings.OverPoint   # QGIS 3.16–3.36
-        lbl.priority   = 10
+            lbl.placement = QgsPalLayerSettings.OverPoint
+        lbl.priority = 10
         fmt = QgsTextFormat()
-        fmt.setFont(QFont('Segoe UI', 7, QFont.Bold))
+        fmt.setFont(QFont('Segoe UI', 7, _FontBold))
         fmt.setColor(QColor('#1E2128'))
         fmt.setSize(7)
         lbl.setFormat(fmt)
-        wp_layer.setLabeling(QgsVectorLayerSimpleLabeling(lbl))
-        wp_layer.setLabelsEnabled(True)
+        layer.setLabeling(QgsVectorLayerSimpleLabeling(lbl))
+        layer.setLabelsEnabled(True)
 
-        QgsProject.instance().addMapLayer(wp_layer)
-        self._preview_layer_ids = [line_layer.id(), wp_layer.id()]
-        self.iface.mapCanvas().refresh()
+        QgsProject.instance().addMapLayer(layer)
+        return layer
 
     def _on_clear_preview(self, reset_area=True):
         # Always remove the flight-path preview layers
@@ -1471,6 +1479,59 @@ class FlyPathDialog(QWidget):
         except Exception:
             return None
 
+    def _write_mission_kmz(self, filepath, waypoints, mission):
+        """Write the KMZ file using current UI parameter values."""
+        write_kmz(
+            filepath=filepath,
+            waypoints=waypoints,
+            drone_name=self.droneModelCombo.currentText(),
+            altitude_m=self.altitudeSpin.value(),
+            speed_ms=self.speedSpin.value(),
+            finish_action_label=self.finishActionCombo.currentText(),
+            rc_lost_action_label=self.rcLostActionCombo.currentText(),
+            gimbal_pitch=self.gimbalAngleSpin.value(),
+            mission_name=mission,
+        )
+
+    def _resolve_local_export_path(self, rc_dir):
+        """
+        Return the target .kmz path for a local or network drive export.
+        Shows any necessary confirmation dialogs.
+        Returns None if the user cancels or a directory cannot be created.
+        """
+        if not os.path.isdir(rc_dir):
+            reply = QMessageBox.question(
+                self, 'Create Folder?',
+                f'The folder does not exist:\n{rc_dir}\n\n'
+                f'Create it and save FlyPath_Mission.kmz there?',
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if reply != QMessageBox.Yes:
+                return None
+            try:
+                os.makedirs(rc_dir, exist_ok=True)
+            except Exception as exc:
+                QMessageBox.critical(self, 'Cannot Create Folder', str(exc))
+                return None
+
+        kmz = self._latest_mission_kmz(rc_dir)
+        if kmz:
+            uuid_name = os.path.basename(os.path.dirname(kmz))
+            reply = QMessageBox.question(
+                self, 'Replace RC Mission?',
+                f'Replace the latest mission on the RC?\n\n'
+                f'UUID: {uuid_name}\n'
+                f'File: {kmz}',
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if reply != QMessageBox.Yes:
+                return None
+            return kmz
+
+        return os.path.join(rc_dir, 'FlyPath_Mission.kmz')
+
     def _on_export(self):
         if not self._has_survey_area():
             return
@@ -1482,9 +1543,7 @@ class FlyPathDialog(QWidget):
             shot_spacing_m = self._shot_spacing_m
         else:
             result = self._generate_waypoints()
-            if not result:
-                QMessageBox.warning(self, 'No Waypoints',
-                                    'The grid produced no waypoints.')
+            if result is None:
                 return
             waypoints, shot_spacing_m = result
 
@@ -1496,42 +1555,9 @@ class FlyPathDialog(QWidget):
             is_local = bool(drive) or rc_dir.startswith('\\\\')
 
             if is_local:
-                # ── Local filesystem path (PC folder, external disk, etc.) ──
-                if not os.path.isdir(rc_dir):
-                    reply = QMessageBox.question(
-                        self, 'Create Folder?',
-                        f'The folder does not exist:\n{rc_dir}\n\n'
-                        f'Create it and save FlyPath_Mission.kmz there?',
-                        QMessageBox.Yes | QMessageBox.No,
-                        QMessageBox.Yes,
-                    )
-                    if reply != QMessageBox.Yes:
-                        return
-                    try:
-                        os.makedirs(rc_dir, exist_ok=True)
-                    except Exception as exc:
-                        QMessageBox.critical(self, 'Cannot Create Folder', str(exc))
-                        return
-                # Check for UUID RC mission folders first
-                kmz = self._latest_mission_kmz(rc_dir)
-                if kmz:
-                    uuid_name = os.path.basename(os.path.dirname(kmz))
-                    reply = QMessageBox.question(
-                        self, 'Replace RC Mission?',
-                        f'Replace the latest mission on the RC?\n\n'
-                        f'UUID: {uuid_name}\n'
-                        f'File: {kmz}',
-                        QMessageBox.Yes | QMessageBox.No,
-                        QMessageBox.Yes,
-                    )
-                    if reply == QMessageBox.Yes:
-                        filepath = kmz
-                    else:
-                        return
-                else:
-                    # Plain folder — save directly
-                    filepath = os.path.join(rc_dir, 'FlyPath_Mission.kmz')
-
+                filepath = self._resolve_local_export_path(rc_dir)
+                if filepath is None:
+                    return
             else:
                 # ── MTP device path (e.g. "This PC\DJI RC 2\...") ─────────
                 ok, detail = self._export_to_mtp_rc(rc_dir, mission,
@@ -1558,17 +1584,7 @@ class FlyPathDialog(QWidget):
             return
 
         try:
-            write_kmz(
-                filepath=filepath,
-                waypoints=waypoints,
-                drone_name=self.droneModelCombo.currentText(),
-                altitude_m=self.altitudeSpin.value(),
-                speed_ms=self.speedSpin.value(),
-                finish_action_label=self.finishActionCombo.currentText(),
-                rc_lost_action_label=self.rcLostActionCombo.currentText(),
-                gimbal_pitch=self.gimbalAngleSpin.value(),
-                mission_name=mission,
-            )
+            self._write_mission_kmz(filepath, waypoints, mission)
             QMessageBox.information(
                 self, 'Export Complete',
                 f'Waypoints: {len(waypoints):,}  ·  '
@@ -1594,18 +1610,33 @@ class FlyPathDialog(QWidget):
             os.environ.get('SystemRoot', r'C:\Windows'),
             r'System32\WindowsPowerShell\v1.0\powershell.exe'
         )
-
-        # Parse path components, stripping 'This PC\' prefix if present
-        rc_norm = rc_dir.replace('/', '\\')
+        rc_norm  = rc_dir.replace('/', '\\')
         if rc_norm.lower().startswith('this pc\\'):
             rc_norm = rc_norm[len('this pc\\'):]
-        parts = [p for p in rc_norm.split('\\') if p]
-        # PowerShell array literal, e.g. @('DJI RC 2', 'Internal shared storage', ...)
+        parts    = [p for p in rc_norm.split('\\') if p]
         ps_parts = ', '.join("'" + p.replace("'", "''") + "'" for p in parts)
+        nav      = self._mtp_nav_fragment(ps_parts)
 
-        # Navigation helper embedded in every script — walks the shell tree
-        # via GetFolder instead of Namespace(path), which MTP requires.
-        _NAV = (
+        tmp_dir = tempfile.mkdtemp(prefix='flypath_')
+        try:
+            uuid_name, err = self._mtp_find_uuid(ps_exe, nav, tmp_dir, rc_dir)
+            if uuid_name is None:
+                return False, err
+
+            tmp_kmz = os.path.join(tmp_dir, uuid_name + '.kmz')
+            try:
+                self._write_mission_kmz(tmp_kmz, waypoints, mission)
+            except Exception as exc:
+                return False, f'Could not write KMZ: {exc}'
+
+            return self._mtp_copy_kmz(ps_exe, nav, tmp_dir, uuid_name, tmp_kmz)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    @staticmethod
+    def _mtp_nav_fragment(ps_parts):
+        """Return the PowerShell fragment that navigates from 'This PC' to the waypoint folder."""
+        return (
             '$shell = New-Object -ComObject Shell.Application\n'
             "$folder = $shell.Namespace('::{20D04FE0-3AEA-1069-A2D8-08002B30309D}')\n"
             '$parts = @(' + ps_parts + ')\n'
@@ -1619,123 +1650,108 @@ class FlyPathDialog(QWidget):
             '            if ($item.Name -like ("*" + $part + "*")) { $found = $item; break }\n'
             '        }\n'
             '    }\n'
-            '    if (-not $found) { Write-Error ("Not found: " + $part); exit 1 }\n'
+            f'    if (-not $found) {{ Write-Error ("Not found: " + $part); exit {_MTP_EXIT_NAV_FAIL} }}\n'
             '    $next = $found.GetFolder\n'
-            '    if (-not $next) { Write-Error ("Cannot open: " + $part); exit 1 }\n'
+            f'    if (-not $next) {{ Write-Error ("Cannot open: " + $part); exit {_MTP_EXIT_NAV_FAIL} }}\n'
             '    $folder = $next\n'
             '}\n'
         )
 
-        tmp_dir = tempfile.mkdtemp(prefix='flypath_')
-        try:
-            # ── Script 1: navigate to waypoint folder, return UUID ─────────
-            find_ps = os.path.join(tmp_dir, 'find_uuid.ps1')
-            with open(find_ps, 'w', encoding='utf-8') as fh:
-                fh.write(
-                    _NAV +
-                    '# $folder is now the waypoint folder\n'
-                    '# Only consider folders whose name matches the DJI UUID format\n'
-                    '$uuidPattern = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"\n'
-                    '$latest = $null; $latestDate = [DateTime]::MinValue\n'
-                    'foreach ($item in $folder.Items()) {\n'
-                    '    if ($item.IsFolder -and $item.Name -match $uuidPattern -and $item.ModifyDate -gt $latestDate) {\n'
-                    '        $latestDate = $item.ModifyDate; $latest = $item\n'
-                    '    }\n'
-                    '}\n'
-                    'if (-not $latest) { exit 2 }\n'
-                    'Write-Output $latest.Name\n'
-                )
+    @staticmethod
+    def _mtp_find_uuid(ps_exe, nav, tmp_dir, rc_dir):
+        """
+        Run Script 1: navigate to waypoint folder and return the latest UUID folder name.
 
-            try:
-                r = subprocess.run(
-                    [ps_exe, '-NoProfile', '-NonInteractive',
-                     '-ExecutionPolicy', 'Bypass', '-File', find_ps],
-                    capture_output=True, text=True, timeout=30
-                )
-            except subprocess.TimeoutExpired:
-                return False, 'Timed out reading the RC waypoint folder.\nCheck the RC is connected via USB.'
-            except Exception as exc:
-                return False, f'PowerShell error: {exc}'
-
-            if r.returncode == 1:
-                return False, (
-                    'Could not navigate to the RC waypoint folder.\n\n'
-                    f'Path used:\n{rc_dir}\n\n'
-                    'Check that the RC is connected via USB and the path is correct.\n\n'
-                    f'Details:\n{r.stderr.strip()}'
-                )
-            if r.returncode == 2 or not r.stdout.strip():
-                return False, (
-                    'No valid mission folder found on the RC.\n\n'
-                    'Open DJI Fly on the RC, create a waypoint mission '
-                    '(even a 3-point dummy), then export again.\n\n'
-                    'FlyPath only replaces folders with a valid DJI UUID name.'
-                )
-            uuid_name = r.stdout.strip().splitlines()[0].strip()
-
-            # ── Write KMZ to temp file named <UUID>.kmz ───────────────────
-            tmp_kmz = os.path.join(tmp_dir, uuid_name + '.kmz')
-            try:
-                write_kmz(
-                    filepath=tmp_kmz,
-                    waypoints=waypoints,
-                    drone_name=self.droneModelCombo.currentText(),
-                    altitude_m=self.altitudeSpin.value(),
-                    speed_ms=self.speedSpin.value(),
-                    finish_action_label=self.finishActionCombo.currentText(),
-                    rc_lost_action_label=self.rcLostActionCombo.currentText(),
-                    gimbal_pitch=self.gimbalAngleSpin.value(),
-                    mission_name=mission,
-                )
-            except Exception as exc:
-                return False, f'Could not write KMZ: {exc}'
-
-            # ── Script 2: copy KMZ into UUID subfolder on RC, wait ────────
-            tmp_kmz_ps = tmp_kmz.replace('/', '\\')
-            copy_ps = os.path.join(tmp_dir, 'copy_kmz.ps1')
-            with open(copy_ps, 'w', encoding='utf-8') as fh:
-                fh.write(
-                    _NAV +
-                    '# Navigate into the UUID subfolder\n'
-                    "$uuid = '" + uuid_name.replace("'", "''") + "'\n"
-                    '$uuidItem = $null\n'
-                    'foreach ($item in $folder.Items()) {\n'
-                    '    if ($item.Name -eq $uuid) { $uuidItem = $item; break }\n'
-                    '}\n'
-                    'if (-not $uuidItem) { Write-Error "UUID folder not found on RC"; exit 3 }\n'
-                    '$uuidFolder = $uuidItem.GetFolder\n'
-                    'if (-not $uuidFolder) { Write-Error "Cannot open UUID folder"; exit 4 }\n'
-                    '# Copy with 0x10 (no confirm only — keep progress UI so Windows\n'
-                    '# Shell actually drives the MTP transfer to completion).\n'
-                    "$uuidFolder.CopyHere('" + tmp_kmz_ps.replace("'", "''") + "', 0x10)\n"
-                    '# CopyHere is async — sleep to let the transfer finish before\n'
-                    '# PowerShell exits and tears down the COM apartment.\n'
-                    'Start-Sleep -Seconds 8\n'
-                    'Write-Output "OK"\n'
-                )
-
-            try:
-                r2 = subprocess.run(
-                    [ps_exe, '-NoProfile', '-NonInteractive', '-STA',
-                     '-ExecutionPolicy', 'Bypass', '-File', copy_ps],
-                    capture_output=True, text=True, timeout=60
-                )
-            except subprocess.TimeoutExpired:
-                return False, 'Copy to RC timed out. Check the RC is still connected.'
-            except Exception as exc:
-                return False, f'Copy error: {exc}'
-
-            if r2.returncode == 0 and 'OK' in r2.stdout:
-                return True, uuid_name
-            if 'TIMEOUT' in r2.stdout:
-                return False, 'Copy to RC timed out waiting for the file to appear.'
-            return False, (
-                f'Copy to RC failed (exit {r2.returncode}).\n'
-                f'{r2.stderr.strip() or r2.stdout.strip()}'
+        Returns (uuid_name, None) on success, or (None, error_message) on failure.
+        """
+        find_ps = os.path.join(tmp_dir, 'find_uuid.ps1')
+        with open(find_ps, 'w', encoding='utf-8') as fh:
+            fh.write(
+                nav +
+                '$uuidPattern = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"\n'
+                '$latest = $null; $latestDate = [DateTime]::MinValue\n'
+                'foreach ($item in $folder.Items()) {\n'
+                '    if ($item.IsFolder -and $item.Name -match $uuidPattern -and $item.ModifyDate -gt $latestDate) {\n'
+                '        $latestDate = $item.ModifyDate; $latest = $item\n'
+                '    }\n'
+                '}\n'
+                f'if (-not $latest) {{ exit {_MTP_EXIT_NO_UUID} }}\n'
+                'Write-Output $latest.Name\n'
             )
 
-        finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+        try:
+            r = subprocess.run(
+                [ps_exe, '-NoProfile', '-NonInteractive',
+                 '-ExecutionPolicy', 'Bypass', '-File', find_ps],
+                capture_output=True, text=True, timeout=30
+            )
+        except subprocess.TimeoutExpired:
+            return None, 'Timed out reading the RC waypoint folder.\nCheck the RC is connected via USB.'
+        except Exception as exc:
+            return None, f'PowerShell error: {exc}'
+
+        if r.returncode == _MTP_EXIT_NAV_FAIL:
+            return None, (
+                'Could not navigate to the RC waypoint folder.\n\n'
+                f'Path used:\n{rc_dir}\n\n'
+                'Check that the RC is connected via USB and the path is correct.\n\n'
+                f'Details:\n{r.stderr.strip()}'
+            )
+        if r.returncode == _MTP_EXIT_NO_UUID or not r.stdout.strip():
+            return None, (
+                'No valid mission folder found on the RC.\n\n'
+                'Open DJI Fly on the RC, create a waypoint mission '
+                '(even a 3-point dummy), then export again.\n\n'
+                'FlyPath only replaces folders with a valid DJI UUID name.'
+            )
+        return r.stdout.strip().splitlines()[0].strip(), None
+
+    @staticmethod
+    def _mtp_copy_kmz(ps_exe, nav, tmp_dir, uuid_name, tmp_kmz):
+        """
+        Run Script 2: copy the KMZ into the UUID subfolder on the RC via Shell.CopyHere.
+
+        Returns (True, uuid_name) on success, or (False, error_message) on failure.
+        """
+        tmp_kmz_ps = tmp_kmz.replace('/', '\\')
+        copy_ps = os.path.join(tmp_dir, 'copy_kmz.ps1')
+        with open(copy_ps, 'w', encoding='utf-8') as fh:
+            fh.write(
+                nav +
+                "$uuid = '" + uuid_name.replace("'", "''") + "'\n"
+                '$uuidItem = $null\n'
+                'foreach ($item in $folder.Items()) {\n'
+                '    if ($item.Name -eq $uuid) { $uuidItem = $item; break }\n'
+                '}\n'
+                f'if (-not $uuidItem) {{ Write-Error "UUID folder not found on RC"; exit {_MTP_EXIT_UUID_MISSING} }}\n'
+                '$uuidFolder = $uuidItem.GetFolder\n'
+                f'if (-not $uuidFolder) {{ Write-Error "Cannot open UUID folder"; exit {_MTP_EXIT_UUID_NO_OPEN} }}\n'
+                # 0x10 = FOF_NOCONFIRMATION — keep progress UI so Windows Shell drives the MTP transfer
+                "$uuidFolder.CopyHere('" + tmp_kmz_ps.replace("'", "''") + "', 0x10)\n"
+                # CopyHere is async — sleep before PowerShell exits and tears down the COM apartment
+                'Start-Sleep -Seconds 8\n'
+                'Write-Output "OK"\n'
+            )
+
+        try:
+            r2 = subprocess.run(
+                [ps_exe, '-NoProfile', '-NonInteractive', '-STA',
+                 '-ExecutionPolicy', 'Bypass', '-File', copy_ps],
+                capture_output=True, text=True, timeout=60
+            )
+        except subprocess.TimeoutExpired:
+            return False, 'Copy to RC timed out. Check the RC is still connected.'
+        except Exception as exc:
+            return False, f'Copy error: {exc}'
+
+        if r2.returncode == 0 and 'OK' in r2.stdout:
+            return True, uuid_name
+        if 'TIMEOUT' in r2.stdout:
+            return False, 'Copy to RC timed out waiting for the file to appear.'
+        return False, (
+            f'Copy to RC failed (exit {r2.returncode}).\n'
+            f'{r2.stderr.strip() or r2.stdout.strip()}'
+        )
 
     # ── Helpers ───────────────────────────────────────────────────────────
 
@@ -1783,16 +1799,18 @@ class FlyPathDialog(QWidget):
         shot_spacing_m = max(
             self.speedSpin.value() * self.photoIntervalSpin.value(), 0.5
         )
-        waypoints, shot_spacing_m = generate_flight_grid(
-            polygon_geom=self._survey_polygon,
-            polygon_crs=self._survey_polygon_crs,
-            altitude_m=self.altitudeSpin.value(),
-            shot_spacing_m=shot_spacing_m,
-            side_overlap=self.sideOverlapSpin.value() / 100.0,
-            direction_deg=self.directionSpin.value(),
-            margin_m=self.marginSpin.value(),
-            drone_specs=DRONE_SPECS[drone],
-        )
-        if not waypoints:
+        try:
+            waypoints, shot_spacing_m = generate_flight_grid(
+                polygon_geom=self._survey_polygon,
+                polygon_crs=self._survey_polygon_crs,
+                altitude_m=self.altitudeSpin.value(),
+                shot_spacing_m=shot_spacing_m,
+                side_overlap=self.sideOverlapSpin.value() / 100.0,
+                direction_deg=self.directionSpin.value(),
+                margin_m=self.marginSpin.value(),
+                drone_specs=DRONE_SPECS[drone],
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, 'Cannot Generate Grid', str(exc))
             return None
         return waypoints, shot_spacing_m

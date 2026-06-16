@@ -62,7 +62,7 @@ class PolygonDrawTool(QgsMapTool):
             match = self.canvas().snappingUtils().snapToMap(pos)
             if match.isValid():
                 return match.point()
-        except Exception:
+        except (RuntimeError, AttributeError):
             pass
         return self.toMapCoordinates(pos)
 

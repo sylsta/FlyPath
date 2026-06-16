@@ -19,7 +19,6 @@ Verified against : DJI Mini 4 Pro + DJI RC2 (native mission dump)
 """
 
 import io
-import math
 import time
 import zipfile
 
@@ -66,15 +65,15 @@ def write_kmz(filepath, waypoints, drone_name, altitude_m, speed_ms,
 
     Parameters
     ----------
-    filepath            : str   — destination .kmz path
-    waypoints           : list of (lon, lat) float tuples in WGS84
-    drone_name          : str   — key from DRONE_SPECS
-    altitude_m          : float — AGL flight altitude in metres
-    speed_ms            : float — waypoint flight speed in m/s
-    finish_action_label : str   — human-readable finish action label
-    altitude_mode_label : str   — human-readable altitude mode label
-    shot_spacing_m      : float — along-track distance between photos in metres
-    mission_name        : str   — embedded in mission metadata
+    filepath              : str   — destination .kmz path
+    waypoints             : list of (lon, lat) float tuples in WGS84
+    drone_name            : str   — key from DRONE_SPECS
+    altitude_m            : float — AGL flight altitude in metres
+    speed_ms              : float — waypoint flight speed in m/s
+    finish_action_label   : str   — human-readable finish action label
+    rc_lost_action_label  : str   — human-readable RC lost action label
+    gimbal_pitch          : float — gimbal pitch angle in degrees (default -90)
+    mission_name          : str   — embedded in mission metadata
 
     Raises
     ------
@@ -261,28 +260,6 @@ def _gimbal_action_group(group_id, pitch_angle=-90):
 
 
 # ── Utilities ──────────────────────────────────────────────────────────────
-
-def _haversine_m(lon1, lat1, lon2, lat2):
-    """Great-circle distance in metres between two WGS84 points."""
-    R = 6_371_000.0
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = (math.sin(dlat / 2) ** 2 +
-         math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) *
-         math.sin(dlon / 2) ** 2)
-    return R * 2 * math.asin(math.sqrt(a))
-
-
-
-def _path_length(waypoints):
-    """Total great-circle path length in metres."""
-    if len(waypoints) < 2:
-        return 0.0
-    return sum(
-        _haversine_m(lon1, lat1, lon2, lat2)
-        for (lon1, lat1), (lon2, lat2) in zip(waypoints, waypoints[1:])
-    )
-
 
 def _esc(text):
     """Minimal XML text escaping."""

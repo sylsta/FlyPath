@@ -52,8 +52,17 @@ def generate_flight_grid(polygon_geom, polygon_crs, altitude_m,
     (waypoints, shot_spacing_m)
     waypoints      : list of (longitude, latitude) tuples in WGS84 — turn points only
     shot_spacing_m : float — along-track photo interval in metres
-    Returns ([], 0.0) on failure.
+    Raises
+    ------
+    ValueError  if inputs are invalid or the polygon produces no waypoints
     """
+    if altitude_m <= 0:
+        raise ValueError('Altitude must be greater than 0.')
+    if not (0.0 <= side_overlap < 1.0):
+        raise ValueError('Side overlap must be between 0% and 99%.')
+    if not drone_specs:
+        raise ValueError('No drone specifications provided.')
+
     wgs84 = QgsCoordinateReferenceSystem('EPSG:4326')
 
     # 1 ── Reproject polygon to WGS84 to locate the UTM zone
@@ -75,7 +84,10 @@ def generate_flight_grid(polygon_geom, polygon_crs, altitude_m,
         poly_utm = poly_utm.buffer(margin_m, 8)
 
     if poly_utm.isEmpty() or poly_utm.isNull():
-        return [], 0.0
+        raise ValueError(
+            'Survey polygon became empty after applying the margin.\n'
+            'Reduce the margin value or use a larger survey area.'
+        )
 
     # 5 ── Camera footprint and spacing (all in metres)
     fl = drone_specs['focal_length_mm']
@@ -94,7 +106,7 @@ def generate_flight_grid(polygon_geom, polygon_crs, altitude_m,
 
     exterior = _exterior_ring(poly_utm)
     if not exterior:
-        return [], 0.0
+        raise ValueError('Survey polygon has no exterior ring — check the polygon geometry.')
 
     rot_pts = [_rotate(pt.x(), pt.y(), cx, cy, -angle_rad) for pt in exterior]
     rotated_poly = QgsGeometry.fromPolygonXY(
@@ -133,7 +145,10 @@ def generate_flight_grid(polygon_geom, polygon_crs, altitude_m,
         line_idx += 1
 
     if not turn_pts_rot:
-        return [], 0.0
+        raise ValueError(
+            'Flight grid produced no waypoints.\n'
+            'Try a larger survey area, lower side overlap, or a smaller margin.'
+        )
 
     # 8 ── Rotate turn points back to UTM orientation
     waypoints_utm = [_rotate(px, py, cx, cy, angle_rad) for px, py in turn_pts_rot]
