@@ -1961,19 +1961,9 @@ class FlyPathDialog(QWidget):
             )
             return
 
+        # No extra confirmation dialog: the mission was already chosen in the
+        # picker and the Export button names it ("Replace ... on RC").
         label = self._mission_display(target)
-        reply = QMessageBox.question(
-            self, 'Replace Mission on RC?',
-            'This will OVERWRITE this mission on the DJI RC. The original '
-            'cannot be recovered.\n\n'
-            f'  Mission: {label}\n'
-            f'  Date:    {target["date_str"]}\n'
-            f'  UUID:    {target["uuid"]}\n\n'
-            'Continue?',
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
-        )
-        if reply != QMessageBox.Yes:
-            return
 
         QApplication.setOverrideCursor(_WaitCursor)
         self.infoBar.setText('Sending the mission to the RC, please wait…')
