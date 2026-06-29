@@ -763,23 +763,32 @@ class FlyPathDialog(QWidget):
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(4)
 
-        status_row = QHBoxLayout()
-        status_row.setContentsMargins(0, 0, 0, 0)
-        status_row.setSpacing(4)
+        # The two ways to find the RC, side by side.
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 0, 0, 0)
+        btn_row.setSpacing(4)
 
-        self.rcStatusLabel = QLabel('Press Detect RC to scan')
+        self.rcRefreshBtn = QPushButton('Auto Detect RC')
+        self.rcRefreshBtn.setMinimumHeight(28)
+        self._tip(self.rcRefreshBtn,
+            'Automatically find the DJI RC, whether it is connected over USB '
+            'or shows up as a removable drive, and list its missions.')
+
+        self.rcManualBtn = QPushButton('Locate folder manually')
+        self.rcManualBtn.setObjectName('rcBrowseBtn')
+        self.rcManualBtn.setMinimumHeight(28)
+        self._tip(self.rcManualBtn,
+            "If auto-detect can't find it, browse to the waypoint folder "
+            'yourself (the folder that holds the mission UUID folders).')
+
+        btn_row.addWidget(self.rcRefreshBtn, 1)
+        btn_row.addWidget(self.rcManualBtn, 1)
+        v.addLayout(btn_row)
+
+        self.rcStatusLabel = QLabel('Press Auto Detect RC to find your controller')
         self.rcStatusLabel.setObjectName('rcStatusLabel')
         self.rcStatusLabel.setWordWrap(True)
-
-        self.rcRefreshBtn = QPushButton('Detect RC')
-        self.rcRefreshBtn.setObjectName('rcBrowseBtn')
-        self.rcRefreshBtn.setFixedWidth(86)
-        self._tip(self.rcRefreshBtn,
-            'Detect the connected DJI RC and list its waypoint missions.')
-
-        status_row.addWidget(self.rcStatusLabel, 1)
-        status_row.addWidget(self.rcRefreshBtn)
-        v.addLayout(status_row)
+        v.addWidget(self.rcStatusLabel)
 
         self.rcMissionCombo = QComboBox()
         self._tip(self.rcMissionCombo,
@@ -787,23 +796,9 @@ class FlyPathDialog(QWidget):
             'Match it by date with what you see in DJI Fly.')
         v.addWidget(self.rcMissionCombo)
 
-        # Manual fallback: point FlyPath at the waypoint folder yourself when
-        # auto-detection cannot find the RC (e.g. an SD card or a mapped drive).
-        manual_row = QHBoxLayout()
-        manual_row.setContentsMargins(0, 0, 0, 0)
-        manual_row.setSpacing(4)
-        self.rcManualBtn = QPushButton('Locate folder…')
-        self.rcManualBtn.setObjectName('rcBrowseBtn')
-        self._tip(self.rcManualBtn,
-            "Can't auto-detect the RC? Browse to the waypoint folder yourself "
-            '(the folder that holds the mission UUID folders).')
-        manual_row.addWidget(self.rcManualBtn)
-        manual_row.addStretch(1)
-        v.addLayout(manual_row)
-
         self.rcNote = QLabel(
             'ⓘ  FlyPath replaces an existing mission. To add a new one, create '
-            'it in DJI Fly first, then Detect RC.')
+            'it in DJI Fly first, then Auto Detect RC.')
         self.rcNote.setObjectName('rcNote')
         self.rcNote.setWordWrap(True)
         v.addWidget(self.rcNote)
@@ -1628,42 +1623,91 @@ class FlyPathDialog(QWidget):
             '  1. On the RC, open DJI Fly.\n'
             '  2. Make a waypoint mission (even a 3-point dummy will do) and '
             'save it.\n'
-            '  3. Back here, press Detect RC (or Locate folder) again.'
+            '  3. Back here, press Auto Detect RC (or Locate folder manually) '
+            'again.'
         )
 
-    def _on_refresh_rc_missions(self):
-        """Auto-detect the RC over USB and populate the mission dropdown."""
-        QApplication.setOverrideCursor(_WaitCursor)
-        self.rcStatusLabel.setText('Scanning the RC…')
-        QApplication.processEvents()
+    @staticmethod
+    def _find_waypoint_on_drives():
+        """
+        Look for the DJI waypoint folder on a lettered drive (SD card, mapped
+        or removable drive). Returns the waypoint folder path, or None.
+
+        This makes auto-detect work regardless of which letter the drive gets:
+        it checks every present fixed/removable drive for the fixed DJI path
+        rather than assuming a specific letter.
+        """
+        rel = os.path.join(*_RC_REL_PARTS)
+        roots = []
         try:
-            status, wp_path, missions, detail = self._list_rc_missions()
+            import ctypes
+            k32 = ctypes.windll.kernel32
+            bitmask = k32.GetLogicalDrives()
+            for i in range(26):
+                if not (bitmask >> i) & 1:
+                    continue
+                root = chr(ord('A') + i) + ':\\'
+                # 2 = removable, 3 = fixed; skip optical/network/etc. to avoid
+                # slow probes or "insert disk" prompts.
+                if k32.GetDriveTypeW(ctypes.c_wchar_p(root)) in (2, 3):
+                    roots.append(root)
+        except Exception:
+            import string
+            roots = [c + ':\\' for c in string.ascii_uppercase
+                     if os.path.isdir(c + ':\\')]
+        for root in roots:
+            candidate = os.path.join(root, rel)
+            try:
+                if os.path.isdir(candidate):
+                    return candidate
+            except Exception:
+                continue
+        return None
+
+    def _on_refresh_rc_missions(self):
+        """Auto-detect the RC (removable drive or USB/MTP) and list missions."""
+        QApplication.setOverrideCursor(_WaitCursor)
+        self.rcStatusLabel.setText('Scanning for the RC…')
+        QApplication.processEvents()
+        drive_path = None
+        try:
+            # 1) Fast: a lettered/removable drive holding the DJI waypoint path.
+            drive_path = self._find_waypoint_on_drives()
+            if drive_path:
+                status, missions = self._list_missions_from_dir(drive_path)
+                wp_path, detail = drive_path, ''
+            else:
+                # 2) The usual case: an MTP device connected over USB.
+                status, wp_path, missions, detail = self._list_rc_missions()
         finally:
             QApplication.restoreOverrideCursor()
 
         if status == 'ok':
             self._rc_waypoint_path = wp_path
             self._populate_mission_combo(missions)
+            where = 'drive' if drive_path else 'USB'
             self.rcStatusLabel.setText(
-                f'DJI RC connected · {len(missions)} mission(s)'
+                f'DJI RC found ({where}) · {len(missions)} mission(s)'
             )
             return
 
         self._rc_waypoint_path = wp_path if status == 'no_mission' else None
         self._populate_mission_combo([])
         if status == 'no_mission':
-            self.rcStatusLabel.setText('DJI RC connected · no missions to replace')
+            self.rcStatusLabel.setText('RC found · no missions to replace')
             self._warn_no_missions()
         elif status == 'not_connected':
             self.rcStatusLabel.setText(
-                'No DJI RC detected — connect via USB, or use Locate folder'
+                'No DJI RC detected — connect via USB, or Locate folder manually'
             )
             QMessageBox.information(
                 self, 'No DJI RC Detected',
-                'No DJI Remote Controller was found over USB.\n\n'
+                'No DJI Remote Controller was found.\n\n'
+                'FlyPath checked both your drives and USB devices.\n\n'
                 'Connect the RC via USB and enable file transfer on it, then '
-                'press Detect RC. If it still is not found, use Locate folder '
-                'to point FlyPath at the waypoint folder yourself.'
+                'press Auto Detect RC. If it still is not found, use '
+                '"Locate folder manually" to point FlyPath at the waypoint '
+                'folder yourself.'
             )
         else:
             self.rcStatusLabel.setText('Could not read the RC')
@@ -2016,9 +2060,10 @@ class FlyPathDialog(QWidget):
         if not target or not self._rc_waypoint_path:
             QMessageBox.information(
                 self, 'No Mission Selected',
-                'Press Detect RC and choose a mission on the RC to replace.\n\n'
+                'Press Auto Detect RC and choose a mission on the RC to '
+                'replace.\n\n'
                 'If the list is empty, create a waypoint mission in DJI Fly '
-                'first, then Detect RC.'
+                'first, then Auto Detect RC.'
             )
             return
 
