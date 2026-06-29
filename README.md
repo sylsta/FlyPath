@@ -154,57 +154,39 @@ Flight statistics (area, distance, photos, batteries, flight time) update below 
 
 ### Step 4 - Export KMZ
 
-FlyPath supports three export workflows depending on the RC path field:
+The action bar has a **Destination** selector with two modes: *Save to computer* and *Send to DJI RC*. The **Export** button changes its label to match what it will do.
 
 ---
 
-#### Workflow A - Direct RC Export (automatic)
+#### Save to computer
 
-This workflow replaces a mission directly on the DJI RC2 via USB, with no manual copying or renaming required.
+Use this to save the mission as a `.kmz` file on your PC or an external drive.
+
+1. Set **Destination** to *Save to computer*.
+2. Click **Browse…** and choose a folder (the folder is remembered for next time).
+3. Click **Export KMZ**. A save dialog opens with a dated default filename.
+4. After saving, FlyPath offers to open the folder.
+
+---
+
+#### Send to DJI RC
+
+This replaces an existing mission directly on the DJI RC over USB, with no manual copying or renaming.
+
+> **Important:** FlyPath can only **replace** a mission that already exists on the RC. It cannot create a brand-new one that appears in the DJI Fly app. To add a mission, create it in DJI Fly first (even a 3-point dummy), then refresh.
 
 **Prerequisites:**
-- Create at least one dummy waypoint mission in DJI Fly on the RC (even a 3-point mission works). This creates the UUID folder that FlyPath will replace.
-- Connect the RC2 to your PC via USB.
+- Create at least one waypoint mission in DJI Fly on the RC. This is the "slot" FlyPath fills.
+- Connect the RC to your PC via USB and enable file transfer on it.
 
-**Setup (one time only):**
+**Steps:**
 
-1. Click **Browse** next to the RC path field to open File Explorer at *This PC*
-2. Navigate to: `DJI RC 2 > Internal shared storage > Android > data > dji.go.v5 > files > waypoint`
-3. Click the address bar to reveal the full path and copy it (Ctrl+C)
-4. Paste it into the RC path field in FlyPath, the path saves automatically
-
-**Exporting:**
-
-1. Click **Export KMZ**
-2. FlyPath finds the most recent mission UUID on the RC, writes the new KMZ, and copies it directly into the UUID folder
-3. A success message confirms which mission was replaced
-4. Disconnect the RC, close and reopen DJI Fly to see the updated mission
-
----
-
-#### Workflow B - Local Folder Export
-
-Use this workflow to save the KMZ to a specific folder on your PC or an external drive.
-
-1. Paste any local folder path (e.g. `F:\missions`) into the RC path field
-2. Click **Export KMZ** and FlyPath saves `FlyPath_Mission.kmz` directly to that folder
-3. If the folder does not exist, FlyPath will offer to create it
-
----
-
-#### Workflow C - Manual Export
-
-Use this workflow when no path is configured, or when you prefer to manage files manually.
-
-1. Leave the RC path field empty
-2. Click **Export KMZ** and a standard save dialog opens
-3. Choose a destination and filename on your PC
-4. Connect your DJI RC2 via USB
-5. In File Explorer, navigate to the RC's waypoint folder:
-   `This PC > DJI RC 2 > Internal shared storage > Android > data > dji.go.v5 > files > waypoint`
-6. Open the UUID folder of an existing mission (created by DJI Fly)
-7. Copy the exported KMZ into that folder and rename it to `<UUID>.kmz`, matching the folder name exactly
-8. Disconnect the RC and close and reopen DJI Fly to see the updated mission
+1. Set **Destination** to *Send to DJI RC*.
+2. Click **Refresh**. FlyPath scans the RC and lists its missions, each shown by date and waypoint count.
+3. Pick the mission you want to replace. Use the date to match what you see in DJI Fly.
+4. Optional: click **Rename…** to give the mission a name that FlyPath remembers on this computer (DJI Fly keeps its own separate name).
+5. Click **Replace "…" on RC** and confirm. FlyPath writes the new mission and copies it into the selected UUID folder.
+6. Disconnect the RC, then close and reopen DJI Fly to see the updated mission.
 
 ---
 

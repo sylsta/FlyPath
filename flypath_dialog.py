@@ -1,16 +1,19 @@
+import datetime
 import math
 import os
 import re
 import shutil
 import subprocess
 import tempfile
+import zipfile
 
 from qgis.PyQt.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QGroupBox, QScrollArea, QFrame,
     QLabel, QLineEdit, QPushButton, QComboBox,
     QSpinBox, QDoubleSpinBox,
-    QMessageBox, QFileDialog,
+    QMessageBox, QFileDialog, QApplication,
+    QStackedWidget, QInputDialog,
 )
 from qgis.PyQt.QtCore import Qt, QObject, QEvent, QSettings, QVariant
 from qgis.PyQt.QtGui import QColor, QFont
@@ -22,6 +25,7 @@ try:
     _EventLeave   = QEvent.Type.Leave
     _FrameNoFrame = QFrame.Shape.NoFrame
     _FontBold     = QFont.Weight.Bold
+    _WaitCursor   = Qt.CursorShape.WaitCursor
 except AttributeError:
     _AlignLeft    = Qt.AlignLeft
     _AlignVCenter = Qt.AlignVCenter
@@ -29,6 +33,7 @@ except AttributeError:
     _EventLeave   = QEvent.Leave
     _FrameNoFrame = QFrame.NoFrame
     _FontBold     = QFont.Bold
+    _WaitCursor   = Qt.WaitCursor
 
 from qgis.core import (
     Qgis,
@@ -58,6 +63,14 @@ _MTP_EXIT_NAV_FAIL      = 1   # could not navigate path to waypoint folder
 _MTP_EXIT_NO_UUID       = 2   # no UUID mission folder found in waypoint folder
 _MTP_EXIT_UUID_MISSING  = 3   # UUID folder gone between script 1 and script 2
 _MTP_EXIT_UUID_NO_OPEN  = 4   # UUID folder exists but GetFolder returned None
+
+# ── RC auto-detection PowerShell exit codes ───────────────────────────────
+_RC_EXIT_FOUND          = 0   # waypoint folder located (PATH/UUID on stdout)
+_RC_EXIT_NONE           = 10  # no DJI RC / waypoint folder found on any device
+_RC_EXIT_DEVICE_NO_WP   = 11  # a DJI device is connected but has no waypoint folder
+
+# Relative path from an MTP storage volume to the DJI waypoint folder
+_RC_REL_PARTS = ['Android', 'data', 'dji.go.v5', 'files', 'waypoint']
 
 # ── Drone / camera specifications ─────────────────────────────────────────
 DRONE_SPECS = {
@@ -297,6 +310,7 @@ class FlyPathDialog(QWidget):
         self._preview_layer_ids  = []     # [path_line_id, waypoints_id]
         self._waypoints          = []
         self._shot_spacing_m     = 0.0
+        self._rc_waypoint_path   = None   # detected RC waypoint folder display path
 
         self._build_ui()
         self._setup_combos()
@@ -633,34 +647,16 @@ class FlyPathDialog(QWidget):
         bar = QWidget()
         bar.setObjectName('actionBar')
         layout = QVBoxLayout(bar)
-        layout.setSpacing(4)
+        layout.setSpacing(6)
         layout.setContentsMargins(8, 6, 8, 10)
 
-        # RC waypoint folder row
-        rc_row = QWidget()
-        rc_layout = QHBoxLayout(rc_row)
-        rc_layout.setContentsMargins(0, 0, 0, 0)
-        rc_layout.setSpacing(4)
+        settings = QSettings('FlyPath', 'FlyPath')
 
-        self.rcPathEdit = QLineEdit()
-        self.rcPathEdit.setPlaceholderText('Paste RC waypoint folder path…')
-        self.rcPathEdit.setText(
-            QSettings('FlyPath', 'FlyPath').value('rc_waypoint_dir', '')
-        )
-        self._tip(self.rcPathEdit,
-            'Path to the waypoint folder on your DJI RC. '
-            'Paste it here once — FlyPath will auto-replace the latest mission on export.')
-
-        self.rcBrowseBtn = QPushButton('Browse…')
-        self.rcBrowseBtn.setObjectName('rcBrowseBtn')
-        self.rcBrowseBtn.setFixedWidth(58)
-        self._tip(self.rcBrowseBtn,
-            'Open File Explorer at "This PC" so you can navigate to the DJI RC, '
-            'copy the waypoint folder path from the address bar, and paste it here.')
-
-        rc_layout.addWidget(self.rcPathEdit)
-        rc_layout.addWidget(self.rcBrowseBtn)
-        layout.addWidget(rc_row)
+        # ── Map actions first (you preview, then choose where it goes) ────────
+        map_row = QWidget()
+        map_layout = QHBoxLayout(map_row)
+        map_layout.setContentsMargins(0, 0, 0, 0)
+        map_layout.setSpacing(4)
 
         self.previewBtn = QPushButton('Preview on Map')
         self.previewBtn.setMinimumHeight(30)
@@ -670,23 +666,136 @@ class FlyPathDialog(QWidget):
 
         self.clearPreviewBtn = QPushButton('Clear Preview')
         self.clearPreviewBtn.setObjectName('clearPreviewBtn')
-        self.clearPreviewBtn.setMinimumHeight(26)
+        self.clearPreviewBtn.setMinimumHeight(30)
         self._tip(self.clearPreviewBtn,
             'Remove the flight path preview layers from the map '
             'and reset the survey area selection.')
 
+        map_layout.addWidget(self.previewBtn, 2)
+        map_layout.addWidget(self.clearPreviewBtn, 1)
+        layout.addWidget(map_row)
+
+        # ── Destination selector ──────────────────────────────────────────────
+        dest_row = QWidget()
+        dest_layout = QHBoxLayout(dest_row)
+        dest_layout.setContentsMargins(0, 0, 0, 0)
+        dest_layout.setSpacing(4)
+
+        self.destCombo = QComboBox()
+        self.destCombo.addItem('Save to computer', 'local')
+        self.destCombo.addItem('Send to DJI RC',   'rc')
+        self._tip(self.destCombo,
+            'Choose where the mission goes: a folder on this computer, '
+            'or directly onto a connected DJI RC.')
+
+        dest_layout.addWidget(QLabel('Destination'))
+        dest_layout.addWidget(self.destCombo, 1)
+        layout.addWidget(dest_row)
+
+        # ── Local / RC panels swapped by the selector ─────────────────────────
+        self.destStack = QStackedWidget()
+        self.destStack.addWidget(self._build_local_dest_panel(settings))
+        self.destStack.addWidget(self._build_rc_dest_panel())
+        layout.addWidget(self.destStack)
+
+        # ── Export (label adapts to the chosen destination) ───────────────────
         self.exportBtn = QPushButton('Export KMZ')
         self.exportBtn.setObjectName('exportBtn')
         self.exportBtn.setMinimumHeight(36)
         self._tip(self.exportBtn,
-            'Export the mission as a DJI WPML KMZ file. '
-            'Load the file in the DJI Fly app to fly the mission.')
-
-        layout.addWidget(self.previewBtn)
-        layout.addWidget(self.clearPreviewBtn)
+            'Save the mission to the chosen folder, or replace the selected '
+            'mission on the RC, depending on the destination above.')
         layout.addWidget(self.exportBtn)
 
+        # Restore last-used destination mode
+        mode = settings.value('dest_mode', 'local')
+        idx  = self.destCombo.findData(mode)
+        self.destCombo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.destStack.setCurrentIndex(self.destCombo.currentIndex())
+        self._update_export_button()
+
         return bar
+
+    def _build_local_dest_panel(self, settings):
+        panel = QWidget()
+        v = QVBoxLayout(panel)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(4)
+
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+
+        self.localFolderEdit = QLineEdit()
+        self.localFolderEdit.setPlaceholderText('Folder to save the .kmz file…')
+        self.localFolderEdit.setText(
+            settings.value('local_export_dir', os.path.expanduser('~'))
+        )
+        self._tip(self.localFolderEdit,
+            'Folder on this computer where the mission .kmz file will be saved.')
+
+        self.localBrowseBtn = QPushButton('Browse…')
+        self.localBrowseBtn.setObjectName('rcBrowseBtn')
+        self.localBrowseBtn.setFixedWidth(64)
+        self._tip(self.localBrowseBtn,
+            'Choose the folder to save the mission file in.')
+
+        row.addWidget(self.localFolderEdit)
+        row.addWidget(self.localBrowseBtn)
+        v.addLayout(row)
+        return panel
+
+    def _build_rc_dest_panel(self):
+        panel = QWidget()
+        v = QVBoxLayout(panel)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(4)
+
+        status_row = QHBoxLayout()
+        status_row.setContentsMargins(0, 0, 0, 0)
+        status_row.setSpacing(4)
+
+        self.rcStatusLabel = QLabel('Press Refresh to scan the RC')
+        self.rcStatusLabel.setObjectName('rcStatusLabel')
+        self.rcStatusLabel.setWordWrap(True)
+
+        self.rcRefreshBtn = QPushButton('Refresh')
+        self.rcRefreshBtn.setObjectName('rcBrowseBtn')
+        self.rcRefreshBtn.setFixedWidth(64)
+        self._tip(self.rcRefreshBtn,
+            'Scan the connected DJI RC and list its waypoint missions.')
+
+        status_row.addWidget(self.rcStatusLabel, 1)
+        status_row.addWidget(self.rcRefreshBtn)
+        v.addLayout(status_row)
+
+        pick_row = QHBoxLayout()
+        pick_row.setContentsMargins(0, 0, 0, 0)
+        pick_row.setSpacing(4)
+
+        self.rcMissionCombo = QComboBox()
+        self._tip(self.rcMissionCombo,
+            'The mission on the RC that will be replaced when you export. '
+            'Match it by date with what you see in DJI Fly.')
+
+        self.rcRenameBtn = QPushButton('Rename…')
+        self.rcRenameBtn.setObjectName('rcBrowseBtn')
+        self.rcRenameBtn.setFixedWidth(64)
+        self._tip(self.rcRenameBtn,
+            'Give the selected mission a name that FlyPath remembers on this '
+            'computer (DJI Fly keeps its own separate name).')
+
+        pick_row.addWidget(self.rcMissionCombo, 1)
+        pick_row.addWidget(self.rcRenameBtn)
+        v.addLayout(pick_row)
+
+        self.rcNote = QLabel(
+            'FlyPath replaces an existing mission. To add a new one, create it '
+            'in DJI Fly first, then Refresh.')
+        self.rcNote.setObjectName('rcNote')
+        self.rcNote.setWordWrap(True)
+        v.addWidget(self.rcNote)
+        return panel
 
     # ── Combo population ──────────────────────────────────────────────────
 
@@ -741,8 +850,12 @@ class FlyPathDialog(QWidget):
         self.layerCombo.currentIndexChanged.connect(self._on_layer_changed)
         self.featureCombo.currentIndexChanged.connect(self._on_feature_changed)
         self.useSelectionBtn.clicked.connect(self._on_use_qgis_selection)
-        self.rcBrowseBtn.clicked.connect(self._on_browse_rc_path)
-        self.rcPathEdit.textChanged.connect(self._on_rc_path_changed)
+        self.destCombo.currentIndexChanged.connect(self._on_destination_changed)
+        self.localBrowseBtn.clicked.connect(self._pick_local_export_folder)
+        self.localFolderEdit.textChanged.connect(self._on_local_folder_changed)
+        self.rcRefreshBtn.clicked.connect(self._on_refresh_rc_missions)
+        self.rcRenameBtn.clicked.connect(self._on_rename_mission)
+        self.rcMissionCombo.currentIndexChanged.connect(self._update_export_button)
         self.drawPolygonBtn.clicked.connect(self._on_draw_polygon)
         self.removePolygonBtn.clicked.connect(self._on_remove_drawn_polygon)
         self.autoDirectionBtn.clicked.connect(self._on_auto_direction)
@@ -1430,69 +1543,306 @@ class FlyPathDialog(QWidget):
     # Standard DJI waypoint subpath on the RC internal storage
     _DJI_WAYPOINT_SUBPATH = 'Android/data/dji.go.v5/files/waypoint'
 
-    def _on_browse_rc_path(self):
-        """
-        Open File Explorer at 'This PC' so the user can navigate to the DJI RC,
-        copy the waypoint folder path from the address bar, and paste it here.
-        MTP devices like DJI RC 2 only appear in Windows Explorer — they cannot
-        be accessed via a standard file dialog.
-        """
-        # ::{20D04FE0-3AEA-1069-A2D8-08002B30309D} is the CLSID for "This PC"
-        explorer_exe = os.path.join(
-            os.environ.get('SystemRoot', r'C:\Windows'), 'explorer.exe'
+    # ── Destination selector ──────────────────────────────────────────────
+
+    def _on_destination_changed(self, _=None):
+        self.destStack.setCurrentIndex(self.destCombo.currentIndex())
+        QSettings('FlyPath', 'FlyPath').setValue(
+            'dest_mode', self.destCombo.currentData()
         )
+        self._update_export_button()
+
+    def _on_local_folder_changed(self, text):
+        QSettings('FlyPath', 'FlyPath').setValue('local_export_dir', text.strip())
+
+    def _pick_local_export_folder(self):
+        """Open a standard folder picker and store the chosen folder."""
+        start = self.localFolderEdit.text().strip()
+        if not (start and os.path.isdir(start)):
+            start = os.path.expanduser('~')
+        folder = QFileDialog.getExistingDirectory(
+            self, 'Choose a folder to save FlyPath missions', start
+        )
+        if folder:
+            self.localFolderEdit.setText(os.path.normpath(folder))
+
+    def _update_export_button(self, _=None):
+        """Make the Export button say exactly what it will do."""
+        if self.destCombo.currentData() == 'rc':
+            mission = self.rcMissionCombo.currentData()
+            if mission:
+                self.exportBtn.setText(
+                    f'Replace "{self._mission_display(mission)}" on RC'
+                )
+            else:
+                self.exportBtn.setText('Send to DJI RC')
+        else:
+            self.exportBtn.setText('Export KMZ')
+
+    # ── RC mission picker ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _mission_display(mission):
+        """Short label for the Export button: nickname if set, else date."""
+        return mission.get('nickname') or mission.get('date_str') or mission['uuid']
+
+    def _mission_label(self, mission):
+        """Full label for the mission dropdown: name + date + waypoint count."""
+        base = mission.get('nickname') or mission.get('date_str')
+        return f'{base}  ·  {mission["n_wp"]} wp'
+
+    @staticmethod
+    def _get_nickname(uuid):
+        return QSettings('FlyPath', 'FlyPath').value(f'nickname/{uuid}', '') or ''
+
+    @staticmethod
+    def _set_nickname(uuid, name):
+        settings = QSettings('FlyPath', 'FlyPath')
+        key = f'nickname/{uuid}'
+        if name:
+            settings.setValue(key, name)
+        else:
+            settings.remove(key)
+
+    def _on_refresh_rc_missions(self):
+        """Scan the RC and populate the mission dropdown."""
+        QApplication.setOverrideCursor(_WaitCursor)
+        self.rcStatusLabel.setText('Scanning the RC…')
+        QApplication.processEvents()
         try:
-            subprocess.Popen(
-                [explorer_exe, '::{20D04FE0-3AEA-1069-A2D8-08002B30309D}']
+            status, wp_path, missions, detail = self._list_rc_missions()
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        self._rc_waypoint_path = wp_path
+        self.rcMissionCombo.blockSignals(True)
+        self.rcMissionCombo.clear()
+        if status == 'ok':
+            self.rcStatusLabel.setText(
+                f'DJI RC connected · {len(missions)} mission(s)'
             )
-        except Exception as exc:
-            QMessageBox.warning(self, 'Could Not Open Explorer',
-                                f'Failed to open File Explorer:\n{exc}')
-            return
+            for m in missions:
+                self.rcMissionCombo.addItem(self._mission_label(m), m)
+        elif status == 'no_mission':
+            self.rcStatusLabel.setText('DJI RC connected · no missions to replace')
+        elif status == 'not_connected':
+            self.rcStatusLabel.setText('No DJI RC detected — connect it via USB')
+        else:
+            self.rcStatusLabel.setText('Could not read the RC')
+        self.rcMissionCombo.blockSignals(False)
+        self._update_export_button()
 
-        QMessageBox.information(
-            self, 'Open File Explorer',
-            'File Explorer has been opened at "This PC".\n\n'
-            'Steps:\n'
-            '  1. Navigate to your DJI RC:\n'
-            '     DJI RC 2 \u203a Internal shared storage\n'
-            '     \u203a Android \u203a data \u203a dji.go.v5 \u203a files \u203a waypoint\n\n'
-            '  2. Click the address bar at the top of Explorer\n'
-            '     to reveal and select the full path.\n\n'
-            '  3. Copy it (Ctrl+C) and paste it into the\n'
-            '     RC path field, then click Set.'
+        if status == 'no_mission':
+            QMessageBox.warning(
+                self, 'No Mission to Replace',
+                'The DJI RC is connected, but it has no waypoint mission for '
+                'FlyPath to replace.\n\n'
+                'On the RC, open DJI Fly and create a waypoint mission (even a '
+                '3-point dummy will do), then press Refresh.'
+            )
+        elif status == 'not_connected':
+            QMessageBox.information(
+                self, 'No DJI RC Detected',
+                'No DJI Remote Controller was found over USB.\n\n'
+                'Connect the RC via USB, enable file transfer on it, then press '
+                'Refresh. Or switch the destination to "Save to computer".'
+            )
+        elif status == 'error' and detail:
+            QMessageBox.warning(self, 'Could Not Read RC', detail)
+
+    def _on_rename_mission(self):
+        """Assign a FlyPath nickname (stored locally) to the selected mission."""
+        mission = self.rcMissionCombo.currentData()
+        if not mission:
+            QMessageBox.information(
+                self, 'No Mission Selected',
+                'Press Refresh and choose a mission first.'
+            )
+            return
+        name, ok = QInputDialog.getText(
+            self, 'Rename Mission',
+            'Name for this mission (remembered on this computer only):\n'
+            f'Date: {mission["date_str"]}   ·   {mission["n_wp"]} waypoints',
+            text=mission.get('nickname') or ''
+        )
+        if not ok:
+            return
+        name = name.strip()
+        self._set_nickname(mission['uuid'], name)
+        mission['nickname'] = name
+        idx = self.rcMissionCombo.currentIndex()
+        if idx >= 0:
+            self.rcMissionCombo.setItemText(idx, self._mission_label(mission))
+        self._update_export_button()
+
+    def _list_rc_missions(self):
+        """
+        Scan the connected RC and return all waypoint missions.
+
+        Returns (status, waypoint_path, missions, detail):
+          status 'ok'            -> missions is a list of dicts (newest first)
+          status 'no_mission'    -> an RC is connected but has no missions
+          status 'not_connected' -> no DJI RC detected
+          status 'error'         -> scan failed; detail holds the message
+        Each mission dict: {uuid, create_ms, date_str, n_wp, nickname}
+        """
+        ps_exe = os.path.join(
+            os.environ.get('SystemRoot', r'C:\Windows'),
+            r'System32\WindowsPowerShell\v1.0\powershell.exe'
+        )
+        tmp_dir = tempfile.mkdtemp(prefix='flypath_')
+        try:
+            list_ps = os.path.join(tmp_dir, 'list_rc.ps1')
+            with open(list_ps, 'w', encoding='utf-8') as fh:
+                fh.write(self._rc_list_script(tmp_dir))
+            try:
+                r = subprocess.run(
+                    [ps_exe, '-NoProfile', '-NonInteractive', '-STA',
+                     '-ExecutionPolicy', 'Bypass', '-File', list_ps],
+                    capture_output=True, text=True, timeout=120
+                )
+            except subprocess.TimeoutExpired:
+                return ('error', None, [], 'Timed out while reading the RC.')
+            except Exception as exc:
+                return ('error', None, [], f'PowerShell error: {exc}')
+
+            if r.returncode == _RC_EXIT_DEVICE_NO_WP:
+                return ('no_mission', None, [], '')
+            if r.returncode == _RC_EXIT_NONE:
+                return ('not_connected', None, [], '')
+            if r.returncode != _RC_EXIT_FOUND:
+                return ('error', None, [],
+                        r.stderr.strip() or f'Scan failed (exit {r.returncode}).')
+
+            wp_path = None
+            uuids = []
+            for line in r.stdout.splitlines():
+                line = line.strip()
+                if line.startswith('PATH='):
+                    wp_path = line[len('PATH='):]
+                elif line.startswith('UUID='):
+                    uuids.append(line[len('UUID='):])
+
+            missions = []
+            for u in uuids:
+                kmz = os.path.join(tmp_dir, u + '.kmz')
+                create_ms, n_wp = self._read_kmz_meta(kmz)
+                missions.append({
+                    'uuid': u,
+                    'create_ms': create_ms,
+                    'date_str': self._fmt_ms(create_ms),
+                    'n_wp': n_wp,
+                    'nickname': self._get_nickname(u),
+                })
+            missions.sort(key=lambda m: m['create_ms'] or 0, reverse=True)
+            if not missions:
+                return ('no_mission', wp_path, [], '')
+            return ('ok', wp_path, missions, '')
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    @staticmethod
+    def _rc_list_script(tmp_dir):
+        """PowerShell: list every RC mission UUID and copy each KMZ to tmp_dir."""
+        rel = ', '.join("'" + p + "'" for p in _RC_REL_PARTS)
+        rel_join = '\\'.join(_RC_REL_PARTS)
+        dest = tmp_dir.replace("'", "''")   # single-quoted PS string
+        return (
+            "$ErrorActionPreference = 'SilentlyContinue'\n"
+            '$shell = New-Object -ComObject Shell.Application\n'
+            "$thisPC = $shell.Namespace('::{20D04FE0-3AEA-1069-A2D8-08002B30309D}')\n"
+            '$rel = @(' + rel + ')\n'
+            '$uuidPattern = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-'
+            '[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"\n'
+            "$dest = $shell.Namespace('" + dest + "')\n"
+            '$deviceSeen = $false\n'
+            'function Nav($folder, $parts) {\n'
+            '    foreach ($part in $parts) {\n'
+            '        $hit = $null\n'
+            '        foreach ($item in $folder.Items()) {\n'
+            '            if ($item.Name -eq $part) { $hit = $item; break }\n'
+            '        }\n'
+            '        if (-not $hit) { return $null }\n'
+            '        $nf = $hit.GetFolder\n'
+            '        if (-not $nf) { return $null }\n'
+            '        $folder = $nf\n'
+            '    }\n'
+            '    return $folder\n'
+            '}\n'
+            'foreach ($device in $thisPC.Items()) {\n'
+            '    if (-not $device.IsFolder) { continue }\n'
+            "    if ($device.Path -match '^[A-Za-z]:\\\\?$') { continue }\n"
+            '    $devFolder = $device.GetFolder\n'
+            '    if (-not $devFolder) { continue }\n'
+            "    if ($device.Name -match 'DJI|RC') { $deviceSeen = $true }\n"
+            '    $roots = New-Object System.Collections.ArrayList\n'
+            '    [void]$roots.Add(@($device.Name, $devFolder))\n'
+            '    foreach ($vol in $devFolder.Items()) {\n'
+            '        if ($vol.IsFolder) {\n'
+            '            $vf = $vol.GetFolder\n'
+            '            if ($vf) { [void]$roots.Add(@(($device.Name + "\\" + $vol.Name), $vf)) }\n'
+            '        }\n'
+            '    }\n'
+            '    foreach ($root in $roots) {\n'
+            '        $wp = Nav $root[1] $rel\n'
+            '        if ($wp) {\n'
+            '            $deviceSeen = $true\n'
+            "            Write-Output ('PATH=' + $root[0] + '\\" + rel_join + "')\n"
+            '            foreach ($item in $wp.Items()) {\n'
+            '                if ($item.IsFolder -and $item.Name -match $uuidPattern) {\n'
+            "                    Write-Output ('UUID=' + $item.Name)\n"
+            '                    $mf = $item.GetFolder\n'
+            '                    foreach ($f in $mf.Items()) {\n'
+            '                        if (-not $f.IsFolder) {\n'
+            '                            $dest.CopyHere($f, 0x10)\n'
+            '                            Start-Sleep -Milliseconds 1500\n'
+            '                        }\n'
+            '                    }\n'
+            '                }\n'
+            '            }\n'
+            f'            exit {_RC_EXIT_FOUND}\n'
+            '        }\n'
+            '    }\n'
+            '}\n'
+            f'if ($deviceSeen) {{ exit {_RC_EXIT_DEVICE_NO_WP} }}\n'
+            f'exit {_RC_EXIT_NONE}\n'
         )
 
-    def _on_rc_path_changed(self, text):
-        QSettings('FlyPath', 'FlyPath').setValue('rc_waypoint_dir', text.strip())
-
-    # DJI mission UUID folder format: 8-4-4-4-12 hex characters
-    _UUID_RE = re.compile(
-        r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}'
-        r'-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
-    )
-
-    def _latest_mission_kmz(self, rc_waypoint_dir):
-        """
-        Find the KMZ file inside the most recently modified UUID folder
-        in the RC waypoint directory.  Returns the KMZ filepath or None.
-        Only considers folders whose names match the DJI UUID format.
-        """
+    @staticmethod
+    def _read_kmz_meta(kmz_path):
+        """Read (createTime_ms, waypoint_count) from a mission KMZ. Returns (0, 0) on failure."""
         try:
-            folders = [
-                os.path.join(rc_waypoint_dir, d)
-                for d in os.listdir(rc_waypoint_dir)
-                if (os.path.isdir(os.path.join(rc_waypoint_dir, d)) and
-                    self._UUID_RE.match(d))
-            ]
-            if not folders:
-                return None
-            latest = max(folders, key=os.path.getmtime)
-            uuid_name = os.path.basename(latest)
-            kmz_path  = os.path.join(latest, uuid_name + '.kmz')
-            return kmz_path if os.path.exists(kmz_path) else None
+            with zipfile.ZipFile(kmz_path) as z:
+                template = z.read('wpmz/template.kml').decode('utf-8', 'replace')
+                try:
+                    waylines = z.read('wpmz/waylines.wpml').decode('utf-8', 'replace')
+                except KeyError:
+                    waylines = ''
+            m = re.search(r'<wpml:createTime>(\d+)</wpml:createTime>', template)
+            create_ms = int(m.group(1)) if m else 0
+            n_wp = len(re.findall(r'<wpml:index>', waylines))
+            return create_ms, n_wp
         except Exception:
-            return None
+            return 0, 0
+
+    @staticmethod
+    def _fmt_ms(create_ms):
+        """Format a DJI createTime (epoch ms) as the date DJI Fly shows."""
+        if not create_ms:
+            return 'unknown date'
+        try:
+            return datetime.datetime.fromtimestamp(
+                create_ms / 1000
+            ).strftime('%Y-%m-%d %H:%M:%S')
+        except Exception:
+            return 'unknown date'
+
+    def _open_in_explorer(self, filepath):
+        """Open File Explorer with the exported file selected."""
+        try:
+            subprocess.Popen(['explorer', '/select,', os.path.normpath(filepath)])
+        except Exception:
+            pass
 
     def _write_mission_kmz(self, filepath, waypoints, mission):
         """Write the KMZ file using current UI parameter values."""
@@ -1508,51 +1858,17 @@ class FlyPathDialog(QWidget):
             mission_name=mission,
         )
 
-    def _resolve_local_export_path(self, rc_dir):
-        """
-        Return the target .kmz path for a local or network drive export.
-        Shows any necessary confirmation dialogs.
-        Returns None if the user cancels or a directory cannot be created.
-        """
-        if not os.path.isdir(rc_dir):
-            reply = QMessageBox.question(
-                self, 'Create Folder?',
-                f'The folder does not exist:\n{rc_dir}\n\n'
-                f'Create it and save FlyPath_Mission.kmz there?',
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes,
-            )
-            if reply != QMessageBox.Yes:
-                return None
-            try:
-                os.makedirs(rc_dir, exist_ok=True)
-            except Exception as exc:
-                QMessageBox.critical(self, 'Cannot Create Folder', str(exc))
-                return None
-
-        kmz = self._latest_mission_kmz(rc_dir)
-        if kmz:
-            uuid_name = os.path.basename(os.path.dirname(kmz))
-            reply = QMessageBox.question(
-                self, 'Replace RC Mission?',
-                f'Replace the latest mission on the RC?\n\n'
-                f'UUID: {uuid_name}\n'
-                f'File: {kmz}',
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes,
-            )
-            if reply != QMessageBox.Yes:
-                return None
-            return kmz
-
-        return os.path.join(rc_dir, 'FlyPath_Mission.kmz')
+    @staticmethod
+    def _default_kmz_name():
+        """A dated default filename so saved missions don't overwrite each other."""
+        return 'FlyPath_' + datetime.datetime.now().strftime('%Y%m%d_%H%M') + '.kmz'
 
     def _on_export(self):
         if not self._has_survey_area():
             return
         mission = 'FlyPath Mission'
 
-        # ── Resolve waypoints first (needed for all export paths) ─────────
+        # ── Resolve waypoints first (needed for both destinations) ────────
         if self._waypoints and self._shot_spacing_m:
             waypoints      = self._waypoints
             shot_spacing_m = self._shot_spacing_m
@@ -1562,60 +1878,115 @@ class FlyPathDialog(QWidget):
                 return
             waypoints, shot_spacing_m = result
 
-        rc_dir   = self.rcPathEdit.text().strip()
-        filepath = None
+        if self.destCombo.currentData() == 'rc':
+            self._export_rc(mission, waypoints, shot_spacing_m)
+        else:
+            self._export_local(mission, waypoints)
 
-        if rc_dir:
-            drive, _ = os.path.splitdrive(rc_dir)
-            is_local = bool(drive) or rc_dir.startswith('\\\\')
-
-            if is_local:
-                filepath = self._resolve_local_export_path(rc_dir)
-                if filepath is None:
-                    return
-            else:
-                # ── MTP device path (e.g. "This PC\DJI RC 2\...") ─────────
-                ok, detail = self._export_to_mtp_rc(rc_dir, mission,
-                                                     waypoints, shot_spacing_m)
-                if ok:
-                    QMessageBox.information(
-                        self, 'Exported to RC',
-                        f'Waypoints: {len(waypoints):,}  ·  '
-                        f'Interval: {self.photoIntervalSpin.value():.1f} s\n\n'
-                        f'Replaced mission on RC:\n{detail}'
-                    )
-                else:
-                    QMessageBox.critical(self, 'RC Export Failed', detail)
+    def _export_local(self, mission, waypoints):
+        """Save the mission as a .kmz file in the chosen folder."""
+        folder = self.localFolderEdit.text().strip() or os.path.expanduser('~')
+        if not os.path.isdir(folder):
+            reply = QMessageBox.question(
+                self, 'Create Folder?',
+                f'The folder does not exist:\n{folder}\n\nCreate it?',
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
+            )
+            if reply != QMessageBox.Yes:
+                return
+            try:
+                os.makedirs(folder, exist_ok=True)
+            except Exception as exc:
+                QMessageBox.critical(self, 'Cannot Create Folder', str(exc))
                 return
 
-        # ── Fall back to standard save dialog ─────────────────────────────
-        if not filepath:
-            filepath, _ = QFileDialog.getSaveFileName(
-                self, 'Export Mission KMZ',
-                'FlyPath_Mission.kmz',
-                'DJI Mission File (*.kmz)'
-            )
+        filepath, _ = QFileDialog.getSaveFileName(
+            self, 'Export Mission KMZ',
+            os.path.join(folder, self._default_kmz_name()),
+            'DJI Mission File (*.kmz)'
+        )
         if not filepath:
             return
 
         try:
             self._write_mission_kmz(filepath, waypoints, mission)
-            QMessageBox.information(
-                self, 'Export Complete',
-                f'Waypoints: {len(waypoints):,}  ·  '
-                f'Interval: {self.photoIntervalSpin.value():.1f} s\n\n'
-                f'Saved to:\n{filepath}'
-            )
         except Exception as exc:
             QMessageBox.critical(self, 'Export Failed', str(exc))
+            return
 
-    def _export_to_mtp_rc(self, rc_dir, mission, waypoints, shot_spacing_m):
+        QSettings('FlyPath', 'FlyPath').setValue(
+            'local_export_dir', os.path.dirname(filepath)
+        )
+        reply = QMessageBox.information(
+            self, 'Export Complete',
+            f'Waypoints: {len(waypoints):,}  ·  '
+            f'Interval: {self.photoIntervalSpin.value():.1f} s\n\n'
+            f'Saved to:\n{filepath}\n\nOpen the folder?',
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
+        )
+        if reply == QMessageBox.Yes:
+            self._open_in_explorer(filepath)
+
+    def _export_rc(self, mission, waypoints, shot_spacing_m):
+        """Replace the selected mission on the connected RC."""
+        target = self.rcMissionCombo.currentData()
+        if not target or not self._rc_waypoint_path:
+            QMessageBox.information(
+                self, 'No Mission Selected',
+                'Press Refresh and choose a mission on the RC to replace.\n\n'
+                'If the list is empty, create a waypoint mission in DJI Fly '
+                'first, then Refresh.'
+            )
+            return
+
+        label = self._mission_display(target)
+        reply = QMessageBox.question(
+            self, 'Replace Mission on RC?',
+            'This will OVERWRITE this mission on the DJI RC. The original '
+            'cannot be recovered.\n\n'
+            f'  Mission: {label}\n'
+            f'  Date:    {target["date_str"]}\n'
+            f'  UUID:    {target["uuid"]}\n\n'
+            'Continue?',
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        QApplication.setOverrideCursor(_WaitCursor)
+        self.infoBar.setText('Sending the mission to the RC, please wait…')
+        QApplication.processEvents()
+        try:
+            ok, detail = self._export_to_mtp_rc(
+                self._rc_waypoint_path, mission, waypoints, shot_spacing_m,
+                target_uuid=target['uuid'],
+            )
+        finally:
+            QApplication.restoreOverrideCursor()
+            self.infoBar.setText(_INFO_IDLE)
+
+        if ok:
+            QMessageBox.information(
+                self, 'Exported to RC',
+                f'Replaced "{label}" on the DJI RC.\n\n'
+                f'Waypoints: {len(waypoints):,}\n'
+                f'UUID: {detail}\n\n'
+                'Reopen DJI Fly on the RC to see the updated mission.'
+            )
+        else:
+            QMessageBox.critical(self, 'RC Export Failed', detail)
+
+    def _export_to_mtp_rc(self, rc_dir, mission, waypoints, shot_spacing_m,
+                          target_uuid=None):
         """
         Export the KMZ directly to a DJI RC connected as an MTP device.
 
         Shell.Namespace() cannot resolve 'This PC\\...' paths directly.
         Instead we navigate step-by-step from the 'This PC' CLSID using
         GetFolder, which works with MTP virtual filesystem items.
+
+        If target_uuid is given, that mission is replaced directly; otherwise
+        the most recently modified mission folder is used.
 
         Returns (success: bool, detail: str)
           success=True  → detail is the UUID that was replaced
@@ -1634,9 +2005,13 @@ class FlyPathDialog(QWidget):
 
         tmp_dir = tempfile.mkdtemp(prefix='flypath_')
         try:
-            uuid_name, err = self._mtp_find_uuid(ps_exe, nav, tmp_dir, rc_dir)
-            if uuid_name is None:
-                return False, err
+            if target_uuid:
+                # Picker already chose the mission; the copy step verifies it exists.
+                uuid_name = target_uuid
+            else:
+                uuid_name, err = self._mtp_find_uuid(ps_exe, nav, tmp_dir, rc_dir)
+                if uuid_name is None:
+                    return False, err
 
             tmp_kmz = os.path.join(tmp_dir, uuid_name + '.kmz')
             try:
