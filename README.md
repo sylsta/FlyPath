@@ -32,8 +32,8 @@ Developed and maintained by [Dronnix](https://www.dronnix.com), a drone mapping 
 - Flight statistics: area, path distance, waypoint count, photo count, estimated batteries, and flight time
 - Configurable safety actions: finish action and RC lost action
 - Exports native DJI WPML KMZ, compatible with DJI Fly on DJI RC2
-- **Direct RC export**: set the RC waypoint folder path once and FlyPath automatically finds and replaces the latest mission on the controller via USB
-- **Local folder export**: set any local or external drive path and FlyPath saves directly to that folder
+- **Direct RC export**: auto-detects the connected DJI RC (over USB, or as a removable drive), lists the missions DJI Fly tracks, and replaces the one you pick, transferred silently over USB with no prompts or pop-up windows
+- **Local folder export**: pick a folder and FlyPath saves a dated `.kmz` file there, then offers to open the folder
 - Contextual info bar, hover over any parameter to see what it does
 - Dark-themed dock panel, designed to complement the QGIS interface
 
@@ -173,7 +173,7 @@ Use this to save the mission as a `.kmz` file on your PC or an external drive.
 
 This replaces an existing mission directly on the DJI RC over USB, with no manual copying or renaming.
 
-> **Important:** FlyPath can only **replace** a mission that already exists on the RC. It cannot create a brand-new one that appears in the DJI Fly app. To add a mission, create it in DJI Fly first (even a 3-point dummy), then click Detect RC.
+> **Important:** FlyPath can only **replace** a mission that already exists on the RC. It cannot create a brand-new one that appears in the DJI Fly app. To add a mission, create it in DJI Fly first (even a 3-point dummy), then click Auto Detect RC.
 
 **Prerequisites:**
 - Create at least one waypoint mission in DJI Fly on the RC. This is the "slot" FlyPath fills.
@@ -182,7 +182,7 @@ This replaces an existing mission directly on the DJI RC over USB, with no manua
 **Steps:**
 
 1. Set **Destination** to *Send to DJI RC*.
-2. Click **Auto Detect RC**. FlyPath finds the controller whether it is connected over USB (MTP) or shows up as a removable/lettered drive (any drive letter), and lists its missions by date and waypoint count (only missions DJI Fly actually tracks are listed). It identifies the RC by its internal folder structure, not by a drive letter or device name, so it works the same on any computer.
+2. Click **Auto Detect RC**. FlyPath finds the controller whether it is connected over USB (MTP) or shows up as a removable/lettered drive (any drive letter), and lists its missions by date and waypoint count (only missions DJI Fly actually tracks are listed). It identifies the RC by its internal folder structure, not by a drive letter or device name, so it works the same on any computer. The detected waypoint folder is shown in a read-only field so you can confirm the target.
 3. If it still is not found, click **Locate folder manually**. This opens a browser of *This PC* that can reach the RC and any drive (unlike the standard folder dialog, which cannot show MTP devices); navigate to the `waypoint` folder and click Select.
 4. If the folder is found but has no missions, FlyPath tells you to create one in DJI Fly first (see the Important note above).
 5. Pick the mission you want to replace. Use the date to match what you see in DJI Fly.
