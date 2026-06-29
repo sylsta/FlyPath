@@ -84,6 +84,81 @@ try:
 except Exception:
     _STARTUPINFO = None
 
+# ── Silent MTP copy via IFileOperation ────────────────────────────────────
+# Shell.CopyHere ignores FOF_NOCONFIRMATION/FOF_SILENT for MTP devices, so it
+# always shows a progress window and a "replace this file?" prompt. The modern
+# IFileOperation API honours those flags and overwrites silently and instantly.
+# Bind the destination from the live Shell object's PIDL (MTP parsing paths are
+# rejected by SHCreateItemFromParsingName).
+_IFILEOP_CS = r'''using System;
+using System.Runtime.InteropServices;
+namespace FlyPathIFO {
+  [ComImport, Guid("43826d1e-e718-42ee-bc55-a1e261c37bfe"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  public interface IShellItem {
+    void BindToHandler(IntPtr pbc, ref Guid bhid, ref Guid riid, out IntPtr ppv);
+    void GetParent(out IShellItem ppsi);
+    void GetDisplayName(uint sigdnName, out IntPtr ppszName);
+    void GetAttributes(uint sfgaoMask, out uint psfgaoAttribs);
+    void Compare(IShellItem psi, uint hint, out int piOrder);
+  }
+  [ComImport, Guid("947aab5f-0a5c-4c13-b4d6-4bf7836fc9f8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  public interface IFileOperation {
+    uint Advise(IntPtr pfops, out uint pdwCookie);
+    void Unadvise(uint dwCookie);
+    void SetOperationFlags(uint dwOperationFlags);
+    void SetProgressMessage([MarshalAs(UnmanagedType.LPWStr)] string pszMessage);
+    void SetProgressDialog(IntPtr popd);
+    void SetProperties(IntPtr pproparray);
+    void SetOwnerWindow(IntPtr hwndOwner);
+    void ApplyPropertiesToItem(IShellItem psiItem);
+    void ApplyPropertiesToItems(IntPtr punkItems);
+    void RenameItem(IShellItem psiItem, [MarshalAs(UnmanagedType.LPWStr)] string pszNewName, IntPtr pfopsItem);
+    void RenameItems(IntPtr pUnkItems, [MarshalAs(UnmanagedType.LPWStr)] string pszNewName);
+    void MoveItem(IShellItem psiItem, IShellItem psiDestinationFolder, [MarshalAs(UnmanagedType.LPWStr)] string pszNewName, IntPtr pfopsItem);
+    void MoveItems(IntPtr punkItems, IShellItem psiDestinationFolder);
+    void CopyItem(IShellItem psiItem, IShellItem psiDestinationFolder, [MarshalAs(UnmanagedType.LPWStr)] string pszCopyName, IntPtr pfopsItem);
+    void CopyItems(IntPtr punkItems, IShellItem psiDestinationFolder);
+    void DeleteItem(IShellItem psiItem, IntPtr pfopsItem);
+    void DeleteItems(IntPtr punkItems);
+    void NewItem(IShellItem psiDestinationFolder, uint dwFileAttributes, [MarshalAs(UnmanagedType.LPWStr)] string pszName, [MarshalAs(UnmanagedType.LPWStr)] string pszTemplateName, IntPtr pfopsItem);
+    void PerformOperations();
+    void GetAnyOperationsAborted([MarshalAs(UnmanagedType.Bool)] out bool pfAnyOperationsAborted);
+  }
+  public static class Op {
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+    static extern void SHCreateItemFromParsingName([MarshalAs(UnmanagedType.LPWStr)] string pszPath, IntPtr pbc, [In] ref Guid riid, [MarshalAs(UnmanagedType.Interface)] out IShellItem ppv);
+    [DllImport("shell32.dll", PreserveSig = false)]
+    static extern void SHGetIDListFromObject([MarshalAs(UnmanagedType.IUnknown)] object punk, out IntPtr ppidl);
+    [DllImport("shell32.dll", PreserveSig = false)]
+    static extern void SHCreateItemFromIDList(IntPtr pidl, [In] ref Guid riid, [MarshalAs(UnmanagedType.Interface)] out IShellItem ppv);
+    static Guid IID = new Guid("43826d1e-e718-42ee-bc55-a1e261c37bfe");
+    static Guid CLSID = new Guid("3ad05575-8857-4850-9277-11b85bdb8e09");
+    static IFileOperation New() {
+      var op = (IFileOperation)Activator.CreateInstance(Type.GetTypeFromCLSID(CLSID));
+      op.SetOperationFlags(1556); // FOF_SILENT|FOF_NOCONFIRMATION|FOF_NOERRORUI|FOF_NOCONFIRMMKDIR
+      return op;
+    }
+    static IShellItem FromObject(object o) {
+      IntPtr pidl; SHGetIDListFromObject(o, out pidl);
+      Guid g = IID; IShellItem si; SHCreateItemFromIDList(pidl, ref g, out si);
+      Marshal.FreeCoTaskMem(pidl);
+      return si;
+    }
+    public static string CopyTo(string srcFile, object destFolderObj, string copyName) {
+      string step = "src";
+      try {
+        Guid a = IID; IShellItem src; SHCreateItemFromParsingName(srcFile, IntPtr.Zero, ref a, out src);
+        step = "dst"; IShellItem dst = FromObject(destFolderObj);
+        step = "copy"; var op = New(); op.CopyItem(src, dst, copyName, IntPtr.Zero); op.PerformOperations();
+        Marshal.ReleaseComObject(op);
+        return "OK";
+      } catch (Exception e) { return "ERR@" + step + ": " + e.Message; }
+    }
+  }
+}'''
+
+_IFILEOP_PS = "Add-Type -Language CSharp -TypeDefinition @'\n" + _IFILEOP_CS + "\n'@\n"
+
 # ── Drone / camera specifications ─────────────────────────────────────────
 DRONE_SPECS = {
     'DJI Mini 3 Pro': {
@@ -2248,14 +2323,19 @@ class FlyPathDialog(QWidget):
     @staticmethod
     def _mtp_copy_kmz(ps_exe, nav, tmp_dir, uuid_name, tmp_kmz):
         """
-        Run Script 2: copy the KMZ into the UUID subfolder on the RC via Shell.CopyHere.
+        Copy the KMZ into the UUID folder on the RC using IFileOperation.
 
-        Returns (True, uuid_name) on success, or (False, error_message) on failure.
+        IFileOperation overwrites silently on MTP devices — no progress window
+        and no "replace this file?" prompt — and is synchronous, so it returns
+        only once the transfer is complete (a second or two, no fixed sleep).
+
+        Returns (True, uuid_name) on success, or (False, error_message).
         """
         tmp_kmz_ps = tmp_kmz.replace('/', '\\')
         copy_ps = os.path.join(tmp_dir, 'copy_kmz.ps1')
         with open(copy_ps, 'w', encoding='utf-8') as fh:
             fh.write(
+                _IFILEOP_PS +
                 nav +
                 "$uuid = '" + uuid_name.replace("'", "''") + "'\n"
                 '$uuidItem = $null\n'
@@ -2263,18 +2343,10 @@ class FlyPathDialog(QWidget):
                 '    if ($item.Name -eq $uuid) { $uuidItem = $item; break }\n'
                 '}\n'
                 f'if (-not $uuidItem) {{ Write-Error "UUID folder not found on RC"; exit {_MTP_EXIT_UUID_MISSING} }}\n'
-                '$uuidFolder = $uuidItem.GetFolder\n'
-                f'if (-not $uuidFolder) {{ Write-Error "Cannot open UUID folder"; exit {_MTP_EXIT_UUID_NO_OPEN} }}\n'
-                # 0x414 = FOF_SILENT | FOF_NOCONFIRMATION | FOF_NOERRORUI:
-                # overwrite the file with no progress window and no "replace
-                # this file?" prompt (FOF_NOCONFIRMATION alone is ignored by
-                # the Shell for MTP devices, hence FOF_SILENT as well).
-                "$uuidFolder.CopyHere('" + tmp_kmz_ps.replace("'", "''") + "', 0x414)\n"
-                # A silent MTP copy has no progress pump, so it finishes in the
-                # background — wait long enough for it to complete before the
-                # COM apartment is torn down. The KMZ is only a few KB.
-                'Start-Sleep -Seconds 18\n'
-                'Write-Output "OK"\n'
+                "$res = [FlyPathIFO.Op]::CopyTo('" + tmp_kmz_ps.replace("'", "''") +
+                "', $uuidItem, ($uuid + '.kmz'))\n"
+                'if ($res -eq "OK") { Write-Output "OK" }\n'
+                f'else {{ Write-Error $res; exit {_MTP_EXIT_UUID_NO_OPEN} }}\n'
             )
 
         try:
@@ -2291,8 +2363,6 @@ class FlyPathDialog(QWidget):
 
         if r2.returncode == 0 and 'OK' in r2.stdout:
             return True, uuid_name
-        if 'TIMEOUT' in r2.stdout:
-            return False, 'Copy to RC timed out waiting for the file to appear.'
         return False, (
             f'Copy to RC failed (exit {r2.returncode}).\n'
             f'{r2.stderr.strip() or r2.stdout.strip()}'
