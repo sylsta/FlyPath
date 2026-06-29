@@ -1793,8 +1793,25 @@ class FlyPathDialog(QWidget):
             '        if ($wp) {\n'
             '            $deviceSeen = $true\n'
             "            Write-Output ('PATH=' + $root[0] + '\\" + rel_join + "')\n"
+            # DJI Fly keeps a map_preview/<UUID> thumbnail folder for every
+            # mission it actually tracks. Build that set so we only report
+            # missions DJI Fly knows about, not folders pasted in manually.
+            '            $preview = @{}\n'
+            '            $hasPreviewDir = $false\n'
+            '            $mp = $null\n'
+            "            foreach ($c in $wp.Items()) { if ($c.IsFolder -and $c.Name -eq 'map_preview') { $mp = $c; break } }\n"
+            '            if ($mp) {\n'
+            '                $mpf = $mp.GetFolder\n'
+            '                if ($mpf) {\n'
+            '                    $hasPreviewDir = $true\n'
+            '                    foreach ($pv in $mpf.Items()) { if ($pv.IsFolder) { $preview[$pv.Name] = $true } }\n'
+            '                }\n'
+            '            }\n'
             '            foreach ($item in $wp.Items()) {\n'
             '                if ($item.IsFolder -and $item.Name -match $uuidPattern) {\n'
+            # Skip missions with no map_preview entry (not known to DJI Fly).
+            # If map_preview is absent entirely, fall back to listing all.
+            '                    if ($hasPreviewDir -and -not $preview.ContainsKey($item.Name)) { continue }\n'
             "                    Write-Output ('UUID=' + $item.Name)\n"
             '                    $mf = $item.GetFolder\n'
             '                    foreach ($f in $mf.Items()) {\n'
