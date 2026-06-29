@@ -76,6 +76,14 @@ _RC_REL_PARTS = ['Android', 'data', 'dji.go.v5', 'files', 'waypoint']
 # 0 elsewhere so the creationflags argument stays valid on every platform).
 _NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
+# Belt-and-suspenders alongside CREATE_NO_WINDOW: force the window hidden.
+try:
+    _STARTUPINFO = subprocess.STARTUPINFO()
+    _STARTUPINFO.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    _STARTUPINFO.wShowWindow = 0   # SW_HIDE
+except Exception:
+    _STARTUPINFO = None
+
 # ── Drone / camera specifications ─────────────────────────────────────────
 DRONE_SPECS = {
     'DJI Mini 3 Pro': {
@@ -1810,7 +1818,7 @@ class FlyPathDialog(QWidget):
                     [ps_exe, '-NoProfile', '-NonInteractive', '-STA',
                      '-ExecutionPolicy', 'Bypass', '-File', list_ps],
                     capture_output=True, text=True, timeout=120,
-                    creationflags=_NO_WINDOW
+                    creationflags=_NO_WINDOW, startupinfo=_STARTUPINFO
                 )
             except subprocess.TimeoutExpired:
                 return ('error', None, [], 'Timed out while reading the RC.')
@@ -2214,7 +2222,7 @@ class FlyPathDialog(QWidget):
                 [ps_exe, '-NoProfile', '-NonInteractive',
                  '-ExecutionPolicy', 'Bypass', '-File', find_ps],
                 capture_output=True, text=True, timeout=30,
-                creationflags=_NO_WINDOW
+                creationflags=_NO_WINDOW, startupinfo=_STARTUPINFO
             )
         except subprocess.TimeoutExpired:
             return None, 'Timed out reading the RC waypoint folder.\nCheck the RC is connected via USB.'
@@ -2257,10 +2265,15 @@ class FlyPathDialog(QWidget):
                 f'if (-not $uuidItem) {{ Write-Error "UUID folder not found on RC"; exit {_MTP_EXIT_UUID_MISSING} }}\n'
                 '$uuidFolder = $uuidItem.GetFolder\n'
                 f'if (-not $uuidFolder) {{ Write-Error "Cannot open UUID folder"; exit {_MTP_EXIT_UUID_NO_OPEN} }}\n'
-                # 0x10 = FOF_NOCONFIRMATION — keep progress UI so Windows Shell drives the MTP transfer
-                "$uuidFolder.CopyHere('" + tmp_kmz_ps.replace("'", "''") + "', 0x10)\n"
-                # CopyHere is async — sleep before PowerShell exits and tears down the COM apartment
-                'Start-Sleep -Seconds 8\n'
+                # 0x414 = FOF_SILENT | FOF_NOCONFIRMATION | FOF_NOERRORUI:
+                # overwrite the file with no progress window and no "replace
+                # this file?" prompt (FOF_NOCONFIRMATION alone is ignored by
+                # the Shell for MTP devices, hence FOF_SILENT as well).
+                "$uuidFolder.CopyHere('" + tmp_kmz_ps.replace("'", "''") + "', 0x414)\n"
+                # A silent MTP copy has no progress pump, so it finishes in the
+                # background — wait long enough for it to complete before the
+                # COM apartment is torn down. The KMZ is only a few KB.
+                'Start-Sleep -Seconds 18\n'
                 'Write-Output "OK"\n'
             )
 
@@ -2269,7 +2282,7 @@ class FlyPathDialog(QWidget):
                 [ps_exe, '-NoProfile', '-NonInteractive', '-STA',
                  '-ExecutionPolicy', 'Bypass', '-File', copy_ps],
                 capture_output=True, text=True, timeout=60,
-                creationflags=_NO_WINDOW
+                creationflags=_NO_WINDOW, startupinfo=_STARTUPINFO
             )
         except subprocess.TimeoutExpired:
             return False, 'Copy to RC timed out. Check the RC is still connected.'
