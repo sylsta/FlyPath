@@ -26,6 +26,10 @@ try:
     _FrameNoFrame = QFrame.Shape.NoFrame
     _FontBold     = QFont.Weight.Bold
     _WaitCursor   = Qt.CursorShape.WaitCursor
+    _MB_YES       = QMessageBox.StandardButton.Yes
+    _MB_NO        = QMessageBox.StandardButton.No
+    _DBB_OK       = QDialogButtonBox.StandardButton.Ok
+    _DBB_CANCEL   = QDialogButtonBox.StandardButton.Cancel
 except AttributeError:
     _AlignLeft    = Qt.AlignLeft
     _AlignVCenter = Qt.AlignVCenter
@@ -34,6 +38,10 @@ except AttributeError:
     _FrameNoFrame = QFrame.NoFrame
     _FontBold     = QFont.Bold
     _WaitCursor   = Qt.WaitCursor
+    _MB_YES       = QMessageBox.Yes
+    _MB_NO        = QMessageBox.No
+    _DBB_OK       = QDialogButtonBox.Ok
+    _DBB_CANCEL   = QDialogButtonBox.Cancel
 
 from qgis.core import (
     Qgis,
@@ -422,8 +430,8 @@ class _RcFolderBrowser(QDialog):
         self.tree.currentItemChanged.connect(self._on_sel)
         v.addWidget(self.tree, 1)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        self._ok = buttons.button(QDialogButtonBox.Ok)
+        buttons = QDialogButtonBox(_DBB_OK | _DBB_CANCEL)
+        self._ok = buttons.button(_DBB_OK)
         self._ok.setText('Select')
         self._ok.setEnabled(False)
         buttons.accepted.connect(self.accept)
@@ -1380,10 +1388,10 @@ class FlyPathDialog(QWidget):
                     self, 'Replace Survey Area?',
                     'A survey area is already defined.\n\n'
                     'Do you want to discard it and draw a new polygon?',
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.No,
+                    _MB_YES | _MB_NO,
+                    _MB_NO,
                 )
-                if reply != QMessageBox.Yes:
+                if reply != _MB_YES:
                     self.drawPolygonBtn.setChecked(False)
                     return
                 # User confirmed — clear everything before drawing
@@ -2331,9 +2339,9 @@ class FlyPathDialog(QWidget):
             reply = QMessageBox.question(
                 self, 'Create Folder?',
                 f'The folder does not exist:\n{folder}\n\nCreate it?',
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
+                _MB_YES | _MB_NO, _MB_YES,
             )
-            if reply != QMessageBox.Yes:
+            if reply != _MB_YES:
                 return
             try:
                 os.makedirs(folder, exist_ok=True)
@@ -2363,9 +2371,9 @@ class FlyPathDialog(QWidget):
             f'Waypoints: {len(waypoints):,}  ·  '
             f'Interval: {self.photoIntervalSpin.value():.1f} s\n\n'
             f'Saved to:\n{filepath}\n\nOpen the folder?',
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
+            _MB_YES | _MB_NO, _MB_YES,
         )
-        if reply == QMessageBox.Yes:
+        if reply == _MB_YES:
             self._open_in_explorer(filepath)
 
     def _export_rc(self, mission, waypoints, shot_spacing_m):
