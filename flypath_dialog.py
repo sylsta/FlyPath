@@ -13,7 +13,7 @@ from qgis.PyQt.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QComboBox,
     QSpinBox, QDoubleSpinBox,
     QMessageBox, QFileDialog, QApplication,
-    QStackedWidget,
+    QStackedWidget, QDialog, QTreeWidget, QTreeWidgetItem, QDialogButtonBox,
 )
 from qgis.PyQt.QtCore import Qt, QObject, QEvent, QSettings, QVariant
 from qgis.PyQt.QtGui import QColor, QFont
@@ -385,6 +385,85 @@ class _HoverFilter(QObject):
             self._label.style().unpolish(self._label)
             self._label.style().polish(self._label)
         return False   # never consume the event
+
+
+# Item-data roles for the shell browser (plain ints: binding-agnostic, and
+# Qt.UserRole is always 0x0100).
+_ROLE_PARTS  = 256   # the list of folder names from "This PC" to this item
+_ROLE_LOADED = 257   # whether this item's children have been fetched yet
+
+
+class _RcFolderBrowser(QDialog):
+    """
+    A folder picker that browses the Windows shell namespace, so it can reach
+    MTP devices (the DJI RC) which the standard folder dialog cannot show.
+
+    Children are loaded lazily (one shell scan per expand) via the supplied
+    list_children(parts) -> [name, ...] callable.
+    """
+
+    def __init__(self, list_children, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle('Select the RC waypoint folder')
+        self._list_children = list_children
+
+        v = QVBoxLayout(self)
+        hint = QLabel(
+            'Browse to the waypoint folder, then click Select. On the RC it is:'
+            '\nDJI RC › Internal shared storage › Android › data '
+            '› dji.go.v5 › files › waypoint'
+        )
+        hint.setWordWrap(True)
+        v.addWidget(hint)
+
+        self.tree = QTreeWidget()
+        self.tree.setHeaderHidden(True)
+        self.tree.itemExpanded.connect(self._on_expand)
+        self.tree.currentItemChanged.connect(self._on_sel)
+        v.addWidget(self.tree, 1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self._ok = buttons.button(QDialogButtonBox.Ok)
+        self._ok.setText('Select')
+        self._ok.setEnabled(False)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        v.addWidget(buttons)
+
+        self.resize(440, 480)
+        self._add_children(None, [])   # populate "This PC"
+
+    def _add_children(self, parent_item, parts):
+        QApplication.setOverrideCursor(_WaitCursor)
+        try:
+            names = self._list_children(parts)
+        except Exception:
+            names = []
+        finally:
+            QApplication.restoreOverrideCursor()
+        for name in names:
+            item = QTreeWidgetItem([name])
+            item.setData(0, _ROLE_PARTS, parts + [name])
+            item.setData(0, _ROLE_LOADED, False)
+            item.addChild(QTreeWidgetItem(['…']))   # dummy → shows arrow
+            if parent_item is None:
+                self.tree.addTopLevelItem(item)
+            else:
+                parent_item.addChild(item)
+
+    def _on_expand(self, item):
+        if item.data(0, _ROLE_LOADED):
+            return
+        item.setData(0, _ROLE_LOADED, True)
+        item.takeChildren()                       # drop the dummy
+        self._add_children(item, item.data(0, _ROLE_PARTS))
+
+    def _on_sel(self, current, _previous):
+        self._ok.setEnabled(bool(current) and current.data(0, _ROLE_PARTS) is not None)
+
+    def selected_parts(self):
+        item = self.tree.currentItem()
+        return item.data(0, _ROLE_PARTS) if item else None
 
 
 class FlyPathDialog(QWidget):
@@ -861,9 +940,8 @@ class FlyPathDialog(QWidget):
         self.rcManualBtn.setObjectName('rcBrowseBtn')
         self.rcManualBtn.setMinimumHeight(28)
         self._tip(self.rcManualBtn,
-            'Browse to the waypoint folder on a drive, SD card, or local copy. '
-            'A USB-connected RC has no drive letter and will not appear here — '
-            'use Auto Detect RC for that.')
+            'Browse This PC yourself — including the RC and any drives — and '
+            'pick the waypoint folder. Use this if Auto Detect did not find it.')
 
         btn_row.addWidget(self.rcRefreshBtn, 1)
         btn_row.addWidget(self.rcManualBtn, 1)
@@ -1800,41 +1878,167 @@ class FlyPathDialog(QWidget):
 
     def _on_locate_folder_manually(self):
         """
-        Manual fallback: the standard Windows folder picker for a waypoint
-        folder on a drive, SD card, or local copy. (A USB RC is an MTP device
-        and cannot appear in this dialog — use Auto Detect RC for that.)
+        Manual fallback: browse the Windows shell namespace (This PC, including
+        the MTP RC and any drives) and pick the waypoint folder yourself.
         """
-        start = self._rc_waypoint_path
-        if not (start and os.path.isdir(start)):
-            start = os.path.expanduser('~')
-        folder = QFileDialog.getExistingDirectory(
-            self, "Select the waypoint folder on a drive, SD card, or local "
-            'copy (a USB RC will not appear here — use Auto Detect RC)', start
-        )
-        if not folder:
+        dlg = _RcFolderBrowser(self._list_shell_children, self)
+        if not dlg.exec():
             return
-        folder = os.path.normpath(folder)
-        status, missions = self._list_missions_from_dir(folder)
+        parts = dlg.selected_parts()
+        if not parts:
+            return
 
+        QApplication.setOverrideCursor(_WaitCursor)
+        try:
+            status, missions = self._list_missions_at_path(parts)
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        display = '\\'.join(parts)
         if status == 'ok':
-            self._rc_waypoint_path = folder
+            self._rc_waypoint_path = display
             self._populate_mission_combo(missions)
             self.rcStatusLabel.setText(f'Folder · {len(missions)} mission(s)')
         elif status == 'no_mission':
-            self._rc_waypoint_path = folder
+            self._rc_waypoint_path = display
             self._populate_mission_combo([])
             self.rcStatusLabel.setText('Folder selected · no missions found')
             self._warn_no_missions()
         else:
             self._rc_waypoint_path = None
             self._populate_mission_combo([])
-            self.rcStatusLabel.setText('That folder could not be read')
+            self.rcStatusLabel.setText('That folder has no missions')
             QMessageBox.warning(
-                self, 'Folder Not Usable',
-                'That folder could not be read as an RC waypoint folder.\n\n'
-                'Choose the folder that directly contains the mission UUID '
-                'folders (usually named "waypoint").'
+                self, 'No Missions Found',
+                'No DJI waypoint missions were found in that folder.\n\n'
+                'Pick the "waypoint" folder itself (the one that holds the '
+                'mission UUID folders).'
             )
+
+    def _list_shell_children(self, parts):
+        """Return the child folder names of a shell path (parts from This PC)."""
+        ps_exe = os.path.join(
+            os.environ.get('SystemRoot', r'C:\Windows'),
+            r'System32\WindowsPowerShell\v1.0\powershell.exe'
+        )
+        tmp_dir = tempfile.mkdtemp(prefix='flypath_')
+        try:
+            sp = os.path.join(tmp_dir, 'children.ps1')
+            with open(sp, 'w', encoding='utf-8') as fh:
+                fh.write(self._shell_children_script(parts))
+            try:
+                r = subprocess.run(
+                    [ps_exe, '-NoProfile', '-NonInteractive', '-STA',
+                     '-ExecutionPolicy', 'Bypass', '-File', sp],
+                    capture_output=True, text=True, timeout=40,
+                    creationflags=_NO_WINDOW, startupinfo=_STARTUPINFO
+                )
+            except Exception:
+                return []
+            return [ln[2:] for ln in r.stdout.splitlines() if ln.startswith('D|')]
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    @staticmethod
+    def _shell_children_script(parts):
+        """PowerShell: list immediate child folders of a shell path (This PC root)."""
+        arr = ', '.join("'" + p.replace("'", "''") + "'" for p in parts)
+        return (
+            "$ErrorActionPreference = 'SilentlyContinue'\n"
+            '$shell = New-Object -ComObject Shell.Application\n'
+            "$folder = $shell.Namespace('::{20D04FE0-3AEA-1069-A2D8-08002B30309D}')\n"
+            '$parts = @(' + arr + ')\n'
+            'foreach ($p in $parts) {\n'
+            '    $hit = $null\n'
+            '    foreach ($i in $folder.Items()) { if ($i.Name -eq $p) { $hit = $i; break } }\n'
+            '    if (-not $hit) { exit 1 }\n'
+            '    $folder = $hit.GetFolder\n'
+            '    if (-not $folder) { exit 1 }\n'
+            '}\n'
+            'foreach ($i in $folder.Items()) {\n'
+            '    if ($i.IsFolder) { Write-Output ("D|" + $i.Name) }\n'
+            '}\n'
+        )
+
+    def _list_missions_at_path(self, parts):
+        """
+        Navigate a chosen shell path and list its waypoint missions.
+        Returns (status, missions) with status 'ok' / 'no_mission' / 'error'.
+        """
+        ps_exe = os.path.join(
+            os.environ.get('SystemRoot', r'C:\Windows'),
+            r'System32\WindowsPowerShell\v1.0\powershell.exe'
+        )
+        tmp_dir = tempfile.mkdtemp(prefix='flypath_')
+        try:
+            sp = os.path.join(tmp_dir, 'list_at.ps1')
+            with open(sp, 'w', encoding='utf-8') as fh:
+                fh.write(self._missions_at_path_script(parts, tmp_dir))
+            try:
+                r = subprocess.run(
+                    [ps_exe, '-NoProfile', '-NonInteractive', '-STA',
+                     '-ExecutionPolicy', 'Bypass', '-File', sp],
+                    capture_output=True, text=True, timeout=120,
+                    creationflags=_NO_WINDOW, startupinfo=_STARTUPINFO
+                )
+            except Exception:
+                return ('error', [])
+            if r.returncode != 0:
+                return ('error', [])
+            uuids = [ln[len('UUID='):].strip()
+                     for ln in r.stdout.splitlines() if ln.startswith('UUID=')]
+            missions = []
+            for u in uuids:
+                create_ms, n_wp = self._read_kmz_meta(os.path.join(tmp_dir, u + '.kmz'))
+                missions.append({
+                    'uuid': u, 'create_ms': create_ms,
+                    'date_str': self._fmt_ms(create_ms), 'n_wp': n_wp,
+                })
+            missions.sort(key=lambda m: m['create_ms'] or 0, reverse=True)
+            return ('ok' if missions else 'no_mission', missions)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    @staticmethod
+    def _missions_at_path_script(parts, tmp_dir):
+        """PowerShell: navigate to a chosen folder, list missions, copy KMZs to tmp_dir."""
+        arr = ', '.join("'" + p.replace("'", "''") + "'" for p in parts)
+        dest = tmp_dir.replace("'", "''")
+        return (
+            "$ErrorActionPreference = 'SilentlyContinue'\n"
+            '$shell = New-Object -ComObject Shell.Application\n'
+            "$folder = $shell.Namespace('::{20D04FE0-3AEA-1069-A2D8-08002B30309D}')\n"
+            '$uuidPattern = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-'
+            '[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"\n'
+            "$dest = $shell.Namespace('" + dest + "')\n"
+            '$parts = @(' + arr + ')\n'
+            'foreach ($p in $parts) {\n'
+            '    $hit = $null\n'
+            '    foreach ($i in $folder.Items()) { if ($i.Name -eq $p) { $hit = $i; break } }\n'
+            '    if (-not $hit) { exit 1 }\n'
+            '    $folder = $hit.GetFolder\n'
+            '    if (-not $folder) { exit 1 }\n'
+            '}\n'
+            '$wp = $folder\n'
+            '$preview = @{}; $hasPreview = $false\n'
+            'foreach ($c in $wp.Items()) {\n'
+            "    if ($c.IsFolder -and $c.Name -eq 'map_preview') {\n"
+            '        $mpf = $c.GetFolder\n'
+            '        if ($mpf) { $hasPreview = $true; foreach ($pv in $mpf.Items()) { if ($pv.IsFolder) { $preview[$pv.Name] = $true } } }\n'
+            '    }\n'
+            '}\n'
+            'foreach ($item in $wp.Items()) {\n'
+            '    if ($item.IsFolder -and $item.Name -match $uuidPattern) {\n'
+            '        if ($hasPreview -and -not $preview.ContainsKey($item.Name)) { continue }\n'
+            "        Write-Output ('UUID=' + $item.Name)\n"
+            '        $mf = $item.GetFolder\n'
+            '        foreach ($f in $mf.Items()) {\n'
+            '            if (-not $f.IsFolder) { $dest.CopyHere($f, 0x10); Start-Sleep -Milliseconds 1500 }\n'
+            '        }\n'
+            '    }\n'
+            '}\n'
+            'exit 0\n'
+        )
 
     def _list_missions_from_dir(self, wp_dir):
         """
