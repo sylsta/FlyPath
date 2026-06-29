@@ -1,20 +1,20 @@
 """
 wpml_writer.py
 --------------
-Generates a DJI-compatible waypoint mission folder for 2D orthomosaic mapping.
+Writes a DJI-compatible WPML mission as a single .kmz file for 2D
+orthomosaic mapping.
 
-Output structure (matches native DJI Fly RC2 format exactly)
-------------------------------------------------------------
-  <output_dir>/
-  └── <uuid>/
-      ├── <uuid>.kmz          — zipped WPML mission
-      │   └── wpmz/
-      │       ├── template.kml    — mission config only (no Placemarks)
-      │       └── waylines.wpml   — mission config + all waypoints
-      └── image/
-          └── ShotSnap.json       — empty index required by DJI Fly
+KMZ contents
+------------
+  <file>.kmz
+  └── wpmz/
+      ├── template.kml    — mission + wayline template config (no Placemarks)
+      └── waylines.wpml   — mission config + all waypoint Placemarks
 
-Namespace  : http://www.uav.com/wpmz/1.0.2  (as used by DJI Fly on RC2)
+On the DJI RC each mission lives in waypoint/<uuid>/<uuid>.kmz; FlyPath
+replaces that file with the .kmz written here.
+
+Namespace        : http://www.uav.com/wpmz/1.0.2  (as used by DJI Fly on RC2)
 Verified against : DJI Mini 4 Pro + DJI RC2 (native mission dump)
 """
 
@@ -56,13 +56,11 @@ def write_kmz(filepath, waypoints, drone_name, altitude_m, speed_ms,
               finish_action_label, rc_lost_action_label,
               gimbal_pitch=-90, mission_name='FlyPath Mission'):
     """
-    Write a single DJI-compatible KMZ file.
+    Write a single DJI-compatible KMZ file at filepath.
 
-    To use on the RC2:
-      1. Create a dummy waypoint mission on the RC in DJI Fly and note its UUID.
-      2. Export from FlyPath — save the .kmz anywhere on your PC.
-      3. Rename the exported file to <UUID>.kmz (matching the RC mission UUID).
-      4. Copy it into the RC's waypoint/<UUID>/ folder, replacing the original.
+    FlyPath calls this both for local exports and when replacing a mission
+    on the RC (it writes the KMZ, then copies it into the mission's UUID
+    folder over USB).
 
     Parameters
     ----------

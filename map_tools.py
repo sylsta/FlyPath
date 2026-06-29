@@ -1,7 +1,7 @@
 from qgis.PyQt.QtCore import pyqtSignal, Qt
 from qgis.PyQt.QtGui import QColor
 from qgis.gui import QgsMapTool, QgsRubberBand, QgsVertexMarker
-from qgis.core import QgsWkbTypes, QgsGeometry, QgsPointXY
+from qgis.core import QgsWkbTypes, QgsGeometry
 
 try:
     _DashLine     = Qt.PenStyle.DashLine

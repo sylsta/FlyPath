@@ -1734,9 +1734,6 @@ class FlyPathDialog(QWidget):
 
     # ── Export ────────────────────────────────────────────────────────────
 
-    # Standard DJI waypoint subpath on the RC internal storage
-    _DJI_WAYPOINT_SUBPATH = 'Android/data/dji.go.v5/files/waypoint'
-
     # ── Destination selector ──────────────────────────────────────────────
 
     def _on_destination_changed(self, _=None):
