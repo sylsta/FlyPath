@@ -952,6 +952,15 @@ class FlyPathDialog(QWidget):
         self.rcStatusLabel.setWordWrap(True)
         v.addWidget(self.rcStatusLabel)
 
+        # Read-only display of the chosen waypoint folder (auto or manual).
+        self.rcTargetEdit = QLineEdit()
+        self.rcTargetEdit.setReadOnly(True)
+        self.rcTargetEdit.setPlaceholderText('No folder selected yet')
+        self._tip(self.rcTargetEdit,
+            'The RC waypoint folder FlyPath will write the mission into. '
+            'Set by Auto Detect RC or Locate folder manually.')
+        v.addWidget(self.rcTargetEdit)
+
         self.rcMissionCombo = QComboBox()
         self._tip(self.rcMissionCombo,
             'The mission on the RC that will be replaced when you export. '
@@ -1774,6 +1783,11 @@ class FlyPathDialog(QWidget):
         self.rcMissionCombo.blockSignals(False)
         self._update_export_button()
 
+    def _set_rc_target(self, path):
+        """Record the chosen waypoint folder and show it in the panel."""
+        self._rc_waypoint_path = path
+        self.rcTargetEdit.setText(path or '')
+
     def _warn_no_missions(self):
         """Guidance shown when a waypoint folder is found but holds no missions."""
         QMessageBox.warning(
@@ -1845,7 +1859,7 @@ class FlyPathDialog(QWidget):
             QApplication.restoreOverrideCursor()
 
         if status == 'ok':
-            self._rc_waypoint_path = wp_path
+            self._set_rc_target(wp_path)
             self._populate_mission_combo(missions)
             where = 'drive' if drive_path else 'USB'
             self.rcStatusLabel.setText(
@@ -1853,7 +1867,7 @@ class FlyPathDialog(QWidget):
             )
             return
 
-        self._rc_waypoint_path = wp_path if status == 'no_mission' else None
+        self._set_rc_target(wp_path if status == 'no_mission' else None)
         self._populate_mission_combo([])
         if status == 'no_mission':
             self.rcStatusLabel.setText('RC found · no missions to replace')
@@ -1896,16 +1910,16 @@ class FlyPathDialog(QWidget):
 
         display = '\\'.join(parts)
         if status == 'ok':
-            self._rc_waypoint_path = display
+            self._set_rc_target(display)
             self._populate_mission_combo(missions)
             self.rcStatusLabel.setText(f'Folder · {len(missions)} mission(s)')
         elif status == 'no_mission':
-            self._rc_waypoint_path = display
+            self._set_rc_target(display)
             self._populate_mission_combo([])
             self.rcStatusLabel.setText('Folder selected · no missions found')
             self._warn_no_missions()
         else:
-            self._rc_waypoint_path = None
+            self._set_rc_target(None)
             self._populate_mission_combo([])
             self.rcStatusLabel.setText('That folder has no missions')
             QMessageBox.warning(
