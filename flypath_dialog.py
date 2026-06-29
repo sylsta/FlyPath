@@ -72,6 +72,10 @@ _RC_EXIT_DEVICE_NO_WP   = 11  # a DJI device is connected but has no waypoint fo
 # Relative path from an MTP storage volume to the DJI waypoint folder
 _RC_REL_PARTS = ['Android', 'data', 'dji.go.v5', 'files', 'waypoint']
 
+# Run PowerShell silently — no console window flashes on screen (Windows only;
+# 0 elsewhere so the creationflags argument stays valid on every platform).
+_NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
 # ── Drone / camera specifications ─────────────────────────────────────────
 DRONE_SPECS = {
     'DJI Mini 3 Pro': {
@@ -1699,7 +1703,8 @@ class FlyPathDialog(QWidget):
                 r = subprocess.run(
                     [ps_exe, '-NoProfile', '-NonInteractive', '-STA',
                      '-ExecutionPolicy', 'Bypass', '-File', list_ps],
-                    capture_output=True, text=True, timeout=120
+                    capture_output=True, text=True, timeout=120,
+                    creationflags=_NO_WINDOW
                 )
             except subprocess.TimeoutExpired:
                 return ('error', None, [], 'Timed out while reading the RC.')
@@ -2073,7 +2078,8 @@ class FlyPathDialog(QWidget):
             r = subprocess.run(
                 [ps_exe, '-NoProfile', '-NonInteractive',
                  '-ExecutionPolicy', 'Bypass', '-File', find_ps],
-                capture_output=True, text=True, timeout=30
+                capture_output=True, text=True, timeout=30,
+                creationflags=_NO_WINDOW
             )
         except subprocess.TimeoutExpired:
             return None, 'Timed out reading the RC waypoint folder.\nCheck the RC is connected via USB.'
@@ -2127,7 +2133,8 @@ class FlyPathDialog(QWidget):
             r2 = subprocess.run(
                 [ps_exe, '-NoProfile', '-NonInteractive', '-STA',
                  '-ExecutionPolicy', 'Bypass', '-File', copy_ps],
-                capture_output=True, text=True, timeout=60
+                capture_output=True, text=True, timeout=60,
+                creationflags=_NO_WINDOW
             )
         except subprocess.TimeoutExpired:
             return False, 'Copy to RC timed out. Check the RC is still connected.'
