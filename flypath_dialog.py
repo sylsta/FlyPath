@@ -849,7 +849,13 @@ class FlyPathDialog(QWidget):
         map_layout.addWidget(self.clearPreviewBtn, 1)
         layout.addWidget(map_row)
 
-        # ── Destination selector ──────────────────────────────────────────────
+        # ── Export section: its own group, separate from the map actions ──────
+        export_group = QGroupBox('Export Mission')
+        export_layout = QVBoxLayout(export_group)
+        export_layout.setSpacing(6)
+        export_layout.setContentsMargins(8, 8, 8, 8)
+
+        # Destination selector
         dest_row = QWidget()
         dest_layout = QHBoxLayout(dest_row)
         dest_layout.setContentsMargins(0, 0, 0, 0)
@@ -864,22 +870,24 @@ class FlyPathDialog(QWidget):
 
         dest_layout.addWidget(QLabel('Destination'))
         dest_layout.addWidget(self.destCombo, 1)
-        layout.addWidget(dest_row)
+        export_layout.addWidget(dest_row)
 
-        # ── Local / RC panels swapped by the selector ─────────────────────────
+        # Local / RC panels swapped by the selector
         self.destStack = QStackedWidget()
         self.destStack.addWidget(self._build_local_dest_panel(settings))
         self.destStack.addWidget(self._build_rc_dest_panel())
-        layout.addWidget(self.destStack)
+        export_layout.addWidget(self.destStack)
 
-        # ── Export (label adapts to the chosen destination) ───────────────────
+        # Export button (label adapts to the chosen destination)
         self.exportBtn = QPushButton('Export KMZ')
         self.exportBtn.setObjectName('exportBtn')
         self.exportBtn.setMinimumHeight(36)
         self._tip(self.exportBtn,
             'Save the mission to the chosen folder, or replace the selected '
             'mission on the RC, depending on the destination above.')
-        layout.addWidget(self.exportBtn)
+        export_layout.addWidget(self.exportBtn)
+
+        layout.addWidget(export_group)
 
         # Restore last-used destination mode
         mode = settings.value('dest_mode', 'local')
