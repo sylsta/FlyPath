@@ -861,8 +861,9 @@ class FlyPathDialog(QWidget):
         self.rcManualBtn.setObjectName('rcBrowseBtn')
         self.rcManualBtn.setMinimumHeight(28)
         self._tip(self.rcManualBtn,
-            "If auto-detect can't find it, browse to the waypoint folder "
-            'yourself (the folder that holds the mission UUID folders).')
+            'Browse to the waypoint folder on a drive, SD card, or local copy. '
+            'A USB-connected RC has no drive letter and will not appear here — '
+            'use Auto Detect RC for that.')
 
         btn_row.addWidget(self.rcRefreshBtn, 1)
         btn_row.addWidget(self.rcManualBtn, 1)
@@ -1803,8 +1804,8 @@ class FlyPathDialog(QWidget):
         if not (start and os.path.isdir(start)):
             start = os.path.expanduser('~')
         folder = QFileDialog.getExistingDirectory(
-            self, "Select the RC 'waypoint' folder (it holds the mission UUID "
-            'folders)', start
+            self, "Select the waypoint folder on a drive, SD card, or local "
+            'copy (a USB RC will not appear here — use Auto Detect RC)', start
         )
         if not folder:
             return
