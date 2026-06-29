@@ -183,7 +183,7 @@ This replaces an existing mission directly on the DJI RC over USB, with no manua
 
 1. Set **Destination** to *Send to DJI RC*.
 2. Click **Auto Detect RC**. FlyPath finds the controller whether it is connected over USB (MTP) or shows up as a removable/lettered drive (any drive letter), and lists its missions by date and waypoint count (only missions DJI Fly actually tracks are listed). It identifies the RC by its internal folder structure, not by a drive letter or device name, so it works the same on any computer.
-3. If it still is not found, click **Locate folder manually** and browse to the `waypoint` folder yourself.
+3. If it still is not found, click **Locate folder manually**. This opens a browser of *This PC* that can reach the RC and any drive (unlike the standard folder dialog, which cannot show MTP devices); navigate to the `waypoint` folder and click Select.
 4. If the folder is found but has no missions, FlyPath tells you to create one in DJI Fly first (see the Important note above).
 5. Pick the mission you want to replace. Use the date to match what you see in DJI Fly.
 6. Click **Replace "…" on RC**. FlyPath writes the new mission into the selected UUID folder.
