@@ -759,15 +759,15 @@ class FlyPathDialog(QWidget):
         status_row.setContentsMargins(0, 0, 0, 0)
         status_row.setSpacing(4)
 
-        self.rcStatusLabel = QLabel('Press Refresh to scan the RC')
+        self.rcStatusLabel = QLabel('Press Detect RC to scan')
         self.rcStatusLabel.setObjectName('rcStatusLabel')
         self.rcStatusLabel.setWordWrap(True)
 
-        self.rcRefreshBtn = QPushButton('Refresh')
+        self.rcRefreshBtn = QPushButton('Detect RC')
         self.rcRefreshBtn.setObjectName('rcBrowseBtn')
-        self.rcRefreshBtn.setFixedWidth(64)
+        self.rcRefreshBtn.setFixedWidth(86)
         self._tip(self.rcRefreshBtn,
-            'Scan the connected DJI RC and list its waypoint missions.')
+            'Detect the connected DJI RC and list its waypoint missions.')
 
         status_row.addWidget(self.rcStatusLabel, 1)
         status_row.addWidget(self.rcRefreshBtn)
@@ -795,7 +795,7 @@ class FlyPathDialog(QWidget):
 
         self.rcNote = QLabel(
             'FlyPath replaces an existing mission. To add a new one, create it '
-            'in DJI Fly first, then Refresh.')
+            'in DJI Fly first, then Detect RC.')
         self.rcNote.setObjectName('rcNote')
         self.rcNote.setWordWrap(True)
         v.addWidget(self.rcNote)
@@ -1642,14 +1642,14 @@ class FlyPathDialog(QWidget):
                 'The DJI RC is connected, but it has no waypoint mission for '
                 'FlyPath to replace.\n\n'
                 'On the RC, open DJI Fly and create a waypoint mission (even a '
-                '3-point dummy will do), then press Refresh.'
+                '3-point dummy will do), then press Detect RC.'
             )
         elif status == 'not_connected':
             QMessageBox.information(
                 self, 'No DJI RC Detected',
                 'No DJI Remote Controller was found over USB.\n\n'
                 'Connect the RC via USB, enable file transfer on it, then press '
-                'Refresh. Or switch the destination to "Save to computer".'
+                'Detect RC. Or switch the destination to "Save to computer".'
             )
         elif status == 'error' and detail:
             QMessageBox.warning(self, 'Could Not Read RC', detail)
@@ -1660,7 +1660,7 @@ class FlyPathDialog(QWidget):
         if not mission:
             QMessageBox.information(
                 self, 'No Mission Selected',
-                'Press Refresh and choose a mission first.'
+                'Press Detect RC and choose a mission first.'
             )
             return
         name, ok = QInputDialog.getText(
@@ -1938,9 +1938,9 @@ class FlyPathDialog(QWidget):
         if not target or not self._rc_waypoint_path:
             QMessageBox.information(
                 self, 'No Mission Selected',
-                'Press Refresh and choose a mission on the RC to replace.\n\n'
+                'Press Detect RC and choose a mission on the RC to replace.\n\n'
                 'If the list is empty, create a waypoint mission in DJI Fly '
-                'first, then Refresh.'
+                'first, then Detect RC.'
             )
             return
 

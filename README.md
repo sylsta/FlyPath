@@ -173,7 +173,7 @@ Use this to save the mission as a `.kmz` file on your PC or an external drive.
 
 This replaces an existing mission directly on the DJI RC over USB, with no manual copying or renaming.
 
-> **Important:** FlyPath can only **replace** a mission that already exists on the RC. It cannot create a brand-new one that appears in the DJI Fly app. To add a mission, create it in DJI Fly first (even a 3-point dummy), then refresh.
+> **Important:** FlyPath can only **replace** a mission that already exists on the RC. It cannot create a brand-new one that appears in the DJI Fly app. To add a mission, create it in DJI Fly first (even a 3-point dummy), then click Detect RC.
 
 **Prerequisites:**
 - Create at least one waypoint mission in DJI Fly on the RC. This is the "slot" FlyPath fills.
@@ -182,7 +182,7 @@ This replaces an existing mission directly on the DJI RC over USB, with no manua
 **Steps:**
 
 1. Set **Destination** to *Send to DJI RC*.
-2. Click **Refresh**. FlyPath scans the RC and lists its missions, each shown by date and waypoint count.
+2. Click **Detect RC**. FlyPath scans the RC and lists its missions, each shown by date and waypoint count.
 3. Pick the mission you want to replace. Use the date to match what you see in DJI Fly.
 4. Optional: click **Rename…** to give the mission a name that FlyPath remembers on this computer (DJI Fly keeps its own separate name).
 5. Click **Replace "…" on RC** and confirm. FlyPath writes the new mission and copies it into the selected UUID folder.
