@@ -5,7 +5,8 @@ qgisMaximumVersion=4.99
 description=Generate DJI WPML KMZ mission files for 2D orthomosaic mapping directly from QGIS
 version=1.2.0
 changelog=1.2.0 - Redesigned export panel: Destination selector (Save to computer / Send to DJI RC),
-    live RC mission picker with local nicknames, replace-only guidance, and progress feedback.
+    RC mission picker that auto-detects the controller (with a manual folder fallback) and lists
+    only the missions DJI Fly tracks, replace-only guidance, and a silent transfer (no console window).
 author=Salar Ghaffarian
 email=salar@dronnix.com
 
