@@ -12,6 +12,11 @@ Public API (same as mtp_access_kio_gvfs.MTPClient):
     client.list_folder('Pixel 9', '')               -> ['Internal storage']
     client.list_folder('Pixel 9', 'Internal storage/DCIM') -> [...]
     client.copy_from_device_to_exact('Pixel 9', 'Internal storage/...', r'C:\\tmp\\...')
+    client.copy_to_device(r'C:\\tmp\\mission.kmz', 'Pixel 9', 'Internal storage/.../mission.kmz')
+        -> overwrites in place if the destination already exists (the usual
+           case for FlyPath: DJI Fly must already have a dummy mission KMZ
+           at that path), otherwise creates a new object in the parent
+           folder.
 """
 
 import ctypes
@@ -50,10 +55,19 @@ WPD_OBJECT_NAME_PID = 4
 WPD_OBJECT_CONTENT_TYPE_PID = 7
 WPD_CONTENT_TYPE_FOLDER = GUID("{27E2E392-A111-48E0-AB0C-E17705A05F85}")
 WPD_CONTENT_TYPE_FUNCTIONAL = GUID("{99ED0160-17FF-4C44-9D98-1D7A6F941921}")
+WPD_CONTENT_TYPE_GENERIC_FILE = GUID("{28D8D31E-249C-454E-AABC-34883927E402}")
 _FMTID_RESOURCE = GUID("{E81E79BE-34F0-41BF-B53F-F1A06AE87842}")
 WPD_RESOURCE_DEFAULT_PID = 0
 STGM_READ = 0x00000000
+STGM_WRITE = 0x00000001
+STGC_DEFAULT = 0x00000000
 _CHUNK = 256 * 1024  # 256 KB
+
+# Object property PIDs used when creating a new object (upload of a file that
+# has no existing counterpart on the device yet). All under _FMTID_OBJECT.
+WPD_OBJECT_PARENT_ID_PID = 3
+WPD_OBJECT_ORIGINAL_FILE_NAME_PID = 12
+WPD_OBJECT_SIZE_PID = 11
 
 
 # ---------------------------------------------------------------------------
@@ -242,6 +256,95 @@ def _stream_read_to_file(stream_addr, chunk_size, dst_file: Path):
 
 
 # ---------------------------------------------------------------------------
+# Write path: GetStream(STGM_WRITE), CreateObjectWithPropertiesAndData,
+# ISequentialStream.Write / IStream.SetSize / IStream.Commit via vtable.
+# ---------------------------------------------------------------------------
+def _resources_get_stream_write(res_addr, oid: str):
+    """Open a write stream onto oid's existing default resource. Returns (stream_addr, chunk_size).
+
+    Used to overwrite a file that is already present on the device — this is
+    the normal case here, since DJI Fly requires a dummy mission (and its
+    .kmz) to already exist before FlyPath can replace its content.
+    """
+    pk = _pk(_FMTID_RESOURCE, WPD_RESOURCE_DEFAULT_PID)
+    optimal_chunk = c_ulong(0)
+    stream_ptr = ctypes.c_void_p(0)
+    fn = _vtbl_fn(res_addr, 5, ctypes.HRESULT,
+                  c_wchar_p, ctypes.c_void_p, c_ulong,
+                  ctypes.POINTER(c_ulong), ctypes.POINTER(ctypes.c_void_p))
+    hr = fn(res_addr, oid,
+            ctypes.cast(ctypes.addressof(pk), ctypes.c_void_p),
+            STGM_WRITE,
+            byref(optimal_chunk),
+            byref(stream_ptr))
+    if hr != 0:
+        raise COMError(hr, f"GetStream(write) hr=0x{hr & 0xFFFFFFFF:08X}", ())
+    chunk = optimal_chunk.value if optimal_chunk.value > 0 else _CHUNK
+    return stream_ptr.value, chunk
+
+
+def _content_create_object_with_data(content_addr, values_addr):
+    """Call CreateObjectWithPropertiesAndData. Returns (stream_addr, chunk_size).
+
+    Used only when no object exists yet at the destination path (uncommon
+    for this plugin's workflow — see _WPDDevice.upload()).
+    """
+    fn = _vtbl_fn(content_addr, 7, ctypes.HRESULT,
+                  ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p),
+                  ctypes.POINTER(c_ulong), ctypes.c_void_p)
+    out_stream = ctypes.c_void_p(0)
+    chunk = c_ulong(0)
+    hr = fn(content_addr, values_addr, byref(out_stream), byref(chunk), None)
+    if hr != 0:
+        raise COMError(hr, f"CreateObjectWithPropertiesAndData hr=0x{hr & 0xFFFFFFFF:08X}", ())
+    return out_stream.value, (chunk.value or _CHUNK)
+
+
+def _stream_write_from_file(stream_addr, chunk_size, src_file: Path, total_size: int):
+    """Write src_file's bytes into an open write stream, then Commit() and Release().
+
+    Calls SetSize() first so overwriting a file with a *smaller* one doesn't
+    leave trailing bytes from the old content after our new data — which
+    would corrupt the KMZ's zip central directory for readers that scan from
+    the true end of the stream. SetSize is best-effort: some MTP drivers
+    don't support it, in which case we log and proceed with Write anyway.
+    """
+    write_fn = _vtbl_fn(stream_addr, 4, ctypes.HRESULT,
+                        ctypes.c_void_p, c_ulong, ctypes.POINTER(c_ulong))
+    setsize_fn = _vtbl_fn(stream_addr, 6, ctypes.HRESULT, ctypes.c_uint64)
+    commit_fn = _vtbl_fn(stream_addr, 8, ctypes.HRESULT, c_ulong)
+    try:
+        hr = setsize_fn(stream_addr, ctypes.c_uint64(total_size))
+        if hr not in (0, 1):  # not S_OK / S_FALSE — driver refused SetSize
+            print(f"[mtp_access_windows] SetSize not supported by this "
+                  f"device driver (hr=0x{hr & 0xFFFFFFFF:08X}); proceeding "
+                  f"without truncation.")
+
+        with open(src_file, 'rb') as fh:
+            while True:
+                data = fh.read(chunk_size)
+                if not data:
+                    break
+                buf = ctypes.create_string_buffer(data, len(data))
+                n_written = c_ulong(0)
+                hr = write_fn(stream_addr, ctypes.cast(buf, ctypes.c_void_p),
+                              len(data), byref(n_written))
+                if hr != 0:
+                    raise COMError(hr, f"Stream Write failed hr=0x{hr & 0xFFFFFFFF:08X}", ())
+                if n_written.value != len(data):
+                    raise IOError(
+                        f"Short write to MTP stream: wrote {n_written.value}/"
+                        f"{len(data)} bytes"
+                    )
+
+        hr = commit_fn(stream_addr, STGC_DEFAULT)
+        if hr != 0:
+            raise COMError(hr, f"Stream Commit failed hr=0x{hr & 0xFFFFFFFF:08X}", ())
+    finally:
+        _com_release(stream_addr)
+
+
+# ---------------------------------------------------------------------------
 # IPortableDeviceProperties helpers
 # Comtypes-generated GetValues / GetStringValue / GetGuidValue work correctly
 # as long as we pass the right pointer type for PROPERTYKEY.
@@ -378,6 +481,79 @@ class _WPDDevice:
         else:
             self._download(oid, dst_exact)
 
+    # ------------------------------------------------------------------
+    # Upload
+    # ------------------------------------------------------------------
+
+    def _replace_existing(self, oid: str, src_file: Path):
+        """Overwrite an existing object's default resource with src_file's bytes.
+
+        Uses a fresh IPortableDeviceResources per call (Transfer()), released
+        afterwards — same pattern as _download(), so the device isn't held
+        busy for anything else.
+        """
+        res_addr = _content_transfer(self._content_addr)
+        try:
+            size = src_file.stat().st_size
+            stream_addr, chunk = _resources_get_stream_write(res_addr, oid)
+            _stream_write_from_file(stream_addr, chunk, src_file, size)
+            # stream released inside _stream_write_from_file
+        finally:
+            _com_release(res_addr)
+
+    def _create_and_upload(self, parent_id: str, filename: str, src_file: Path):
+        """Create a new object under parent_id and upload src_file's bytes into it."""
+        values = comtypes.client.CreateObject(CLSID_PortableDeviceValues,
+                                              interface=IPortableDeviceValues)
+        pk_parent = _pk(_FMTID_OBJECT, WPD_OBJECT_PARENT_ID_PID)
+        pk_name = _pk(_FMTID_OBJECT, WPD_OBJECT_NAME_PID)
+        pk_orig = _pk(_FMTID_OBJECT, WPD_OBJECT_ORIGINAL_FILE_NAME_PID)
+        pk_type = _pk(_FMTID_OBJECT, WPD_OBJECT_CONTENT_TYPE_PID)
+        pk_size = _pk(_FMTID_OBJECT, WPD_OBJECT_SIZE_PID)
+
+        values.SetStringValue(ctypes.pointer(pk_parent), parent_id)
+        values.SetStringValue(ctypes.pointer(pk_name), filename)
+        values.SetStringValue(ctypes.pointer(pk_orig), filename)
+        values.SetGuidValue(ctypes.pointer(pk_type), WPD_CONTENT_TYPE_GENERIC_FILE)
+        values.SetUnsignedLargeIntegerValue(ctypes.pointer(pk_size),
+                                            src_file.stat().st_size)
+
+        values_addr = ctypes.cast(values, ctypes.c_void_p).value
+        stream_addr, chunk = _content_create_object_with_data(
+            self._content_addr, values_addr
+        )
+        _stream_write_from_file(stream_addr, chunk, src_file, src_file.stat().st_size)
+
+    def upload(self, src_local: Path, dst_path: str):
+        """Upload a single local file to dst_path (slash-separated) on the device.
+
+        If an object already exists at dst_path, its content is overwritten
+        in place (the normal case: DJI Fly requires a dummy mission — and
+        its .kmz — to already exist before FlyPath can replace it). If no
+        object exists there yet, a new one is created in the parent folder,
+        which must already exist.
+        """
+        if not src_local.is_file():
+            raise IsADirectoryError(f"upload() only supports single files, got: {src_local}")
+
+        existing = self._resolve(dst_path)
+        if existing is not None and not existing[1]:  # found, and it's a file
+            self._replace_existing(existing[0], src_local)
+            return
+
+        parts = [p for p in dst_path.replace('\\', '/').split('/') if p]
+        if not parts:
+            raise ValueError(f"Invalid destination path: {dst_path!r}")
+        parent_path = '/'.join(parts[:-1])
+        filename = parts[-1]
+        parent = self._resolve(parent_path)
+        if parent is None or not parent[1]:
+            raise FileNotFoundError(
+                f"Destination folder not found on {self.friendly_name!r}: "
+                f"{parent_path!r}"
+            )
+        self._create_and_upload(parent[0], filename, src_local)
+
 
 # ---------------------------------------------------------------------------
 # MTPClient — public API
@@ -424,6 +600,14 @@ class MTPClient:
 
     def copy_from_device_to_exact(self, device: str, src_path: str, dst_exact: str):
         self._dev(device).copy_subtree(src_path, Path(dst_exact))
+
+    def copy_to_device(self, src_local: str, device: str, dst_path: str):
+        """Upload src_local to dst_path (slash-separated) on device.
+
+        Overwrites the destination's existing content if an object already
+        exists there; otherwise creates a new object in the parent folder.
+        """
+        self._dev(device).upload(Path(src_local), dst_path)
 
 
 # ---------------------------------------------------------------------------
