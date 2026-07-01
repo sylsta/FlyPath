@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import zipfile
 
@@ -64,6 +65,7 @@ from qgis.core import (
 from .map_tools import PolygonDrawTool
 from .grid_planner import generate_flight_grid, find_optimal_direction
 from .wpml_writer import write_kmz
+from .mtp_access_kio_gvfs import MTPClient
 
 
 # ── MTP PowerShell exit codes ─────────────────────────────────────────────
@@ -91,6 +93,45 @@ try:
     _STARTUPINFO.wShowWindow = 0   # SW_HIDE
 except Exception:
     _STARTUPINFO = None
+
+# ── Platform dispatch ──────────────────────────────────────────────────────
+# The RC-export machinery below has two implementations:
+#   - Windows: PowerShell + COM (Shell.Application / IFileOperation), because
+#     Windows exposes the DJI RC (an MTP device) under "This PC".
+#   - Linux: the mtp_access_kio_gvfs module, which talks to whichever backend
+#     the desktop environment provides (gvfs on GNOME, KIO on KDE).
+# Everything else (local export, folder-based RC export, mission listing from
+# a real filesystem path) is already OS-agnostic and untouched.
+_IS_WINDOWS = sys.platform.startswith('win')
+
+_mtp_client_cache = {'client': None, 'tried': False}
+
+
+def _get_mtp_client():
+    """Lazily create and cache the Linux MTPClient.
+
+    Returns None (rather than raising) if no backend (gvfs/KIO) is available,
+    so callers can show a friendly message instead of crashing.
+    """
+    if _mtp_client_cache['tried']:
+        return _mtp_client_cache['client']
+    _mtp_client_cache['tried'] = True
+    try:
+        _mtp_client_cache['client'] = MTPClient()
+    except Exception:
+        _mtp_client_cache['client'] = None
+    return _mtp_client_cache['client']
+
+
+def _reset_mtp_client_cache():
+    """Force the next _get_mtp_client() call to re-detect the backend.
+
+    Useful after the user plugs in / powers on the RC mid-session, since the
+    gvfs/KIO daemon may not have been running at first detection.
+    """
+    _mtp_client_cache['client'] = None
+    _mtp_client_cache['tried'] = False
+
 
 # ── Silent MTP copy via IFileOperation ────────────────────────────────────
 # Shell.CopyHere ignores FOF_NOCONFIRMATION/FOF_SILENT for MTP devices, so it
@@ -204,6 +245,39 @@ DRONE_SPECS = {
         'battery_time_min':  45,
         'info': '1" CMOS  ·  50 MP  ·  24 mm equiv',
     },
+    'DJI Air 3 (16:9) 12 MP': {
+        'sensor_width_mm': 9.6,
+        'sensor_height_mm': 5.4,  # recalculé proportionnellement au crop 16:9
+        'focal_length_mm': 6.9,
+        'image_width_px': 4032,
+        'image_height_px': 2268,
+        'max_speed_ms': 21.0,
+        'battery_time_min': 46,
+        'info': '1/1.3" CMOS  ·  crop 16:9  ·  24 mm equiv  ·  f/1.7',
+    },
+
+    'DJI Air 3 (4:3) 12 MP': {
+        'sensor_width_mm': 9.6,
+        'sensor_height_mm': 7.2,
+        'focal_length_mm': 6.9,
+        'image_width_px': 4032,
+        'image_height_px': 3024,
+        'max_speed_ms': 21.0,
+        'battery_time_min': 46,
+        'info': '1/1.3" CMOS  ·  12 MP (mode 4:3, quad-bayer)  ·  24 mm equiv  ·  f/1.7',
+    },
+
+    'DJI Air 3 (4:3) 48MP': {
+        'sensor_width_mm': 9.6,
+        'sensor_height_mm': 7.2,
+        'focal_length_mm': 6.9,
+        'image_width_px': 8064,
+        'image_height_px': 6048,
+        'max_speed_ms': 21.0,
+        'battery_time_min': 46,
+        'info': '1/1.3" CMOS  ·  48 MP natif (pleine résolution capteur)  ·  24 mm equiv  ·  f/1.7',
+    },
+
 }
 
 # ── Dark stylesheet (Litchi-inspired) ─────────────────────────────────────
@@ -1944,6 +2018,12 @@ class FlyPathDialog(QWidget):
 
     def _list_shell_children(self, parts):
         """Return the child folder names of a shell path (parts from This PC)."""
+        if not _IS_WINDOWS:
+            return self._list_shell_children_linux(parts)
+        return self._list_shell_children_windows(parts)
+
+    def _list_shell_children_windows(self, parts):
+        """Windows: return the child folder names of a shell path (This PC)."""
         ps_exe = os.path.join(
             os.environ.get('SystemRoot', r'C:\Windows'),
             r'System32\WindowsPowerShell\v1.0\powershell.exe'
@@ -1990,6 +2070,15 @@ class FlyPathDialog(QWidget):
     def _list_missions_at_path(self, parts):
         """
         Navigate a chosen shell path and list its waypoint missions.
+        Returns (status, missions) with status 'ok' / 'no_mission' / 'error'.
+        """
+        if not _IS_WINDOWS:
+            return self._list_missions_at_path_linux(parts)
+        return self._list_missions_at_path_windows(parts)
+
+    def _list_missions_at_path_windows(self, parts):
+        """
+        Windows: navigate a chosen shell path and list its waypoint missions.
         Returns (status, missions) with status 'ok' / 'no_mission' / 'error'.
         """
         ps_exe = os.path.join(
@@ -2107,6 +2196,21 @@ class FlyPathDialog(QWidget):
     def _list_rc_missions(self):
         """
         Scan the connected RC and return all waypoint missions.
+
+        Returns (status, waypoint_path, missions, detail):
+          status 'ok'            -> missions is a list of dicts (newest first)
+          status 'no_mission'    -> an RC is connected but has no missions
+          status 'not_connected' -> no DJI RC detected
+          status 'error'         -> scan failed; detail holds the message
+        Each mission dict: {uuid, create_ms, date_str, n_wp}
+        """
+        if not _IS_WINDOWS:
+            return self._list_rc_missions_linux()
+        return self._list_rc_missions_windows()
+
+    def _list_rc_missions_windows(self):
+        """
+        Windows: scan the connected RC and return all waypoint missions.
 
         Returns (status, waypoint_path, missions, detail):
           status 'ok'            -> missions is a list of dicts (newest first)
@@ -2284,9 +2388,14 @@ class FlyPathDialog(QWidget):
             return 'unknown date'
 
     def _open_in_explorer(self, filepath):
-        """Open File Explorer with the exported file selected."""
+        """Open the system file manager with the exported file's folder."""
         try:
-            subprocess.Popen(['explorer', '/select,', os.path.normpath(filepath)])
+            if _IS_WINDOWS:
+                subprocess.Popen(['explorer', '/select,', os.path.normpath(filepath)])
+            else:
+                # xdg-open has no "select this file" equivalent across file
+                # managers, so open the containing folder instead.
+                subprocess.Popen(['xdg-open', os.path.dirname(os.path.abspath(filepath))])
         except Exception:
             pass
 
@@ -2440,6 +2549,26 @@ class FlyPathDialog(QWidget):
         """
         Export the KMZ directly to a DJI RC connected as an MTP device.
 
+        Dispatches to the Windows (PowerShell/COM) or Linux (gvfs/KIO)
+        implementation depending on the platform.
+
+        Returns (success: bool, detail: str)
+          success=True  → detail is the UUID that was replaced
+          success=False → detail is a human-readable error message
+        """
+        if not _IS_WINDOWS:
+            return self._export_to_mtp_rc_linux(
+                rc_dir, mission, waypoints, target_uuid=target_uuid
+            )
+        return self._export_to_mtp_rc_windows(
+            rc_dir, mission, waypoints, shot_spacing_m, target_uuid=target_uuid
+        )
+
+    def _export_to_mtp_rc_windows(self, rc_dir, mission, waypoints, shot_spacing_m,
+                          target_uuid=None):
+        """
+        Windows: export the KMZ directly to a DJI RC connected as an MTP device.
+
         Shell.Namespace() cannot resolve 'This PC\\...' paths directly.
         Instead we navigate step-by-step from the 'This PC' CLSID using
         GetFolder, which works with MTP virtual filesystem items.
@@ -2479,6 +2608,270 @@ class FlyPathDialog(QWidget):
                 return False, f'Could not write KMZ: {exc}'
 
             return self._mtp_copy_kmz(ps_exe, nav, tmp_dir, uuid_name, tmp_kmz)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    # ── Linux MTP support (gvfs / KIO via mtp_access_kio_gvfs) ─────────────
+    # These mirror the Windows Shell.Application logic above: try the device
+    # root plus each of its top-level folders as a candidate base, walk down
+    # _RC_REL_PARTS from there, and stop at the first one that resolves.
+
+    @staticmethod
+    def _linux_resolve_device(client, display_name):
+        """Find the MTPClient device identifier matching a display name."""
+        try:
+            for dev in client.list_devices():
+                if client.get_display_name(dev) == display_name:
+                    return dev
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _linux_navigate(client, device, parts):
+        """
+        Walk down `parts` from the device root, checking at each level that
+        the next component actually appears in its parent's listing (rather
+        than blindly listing the terminal folder, which can't distinguish
+        "doesn't exist" from "empty").
+
+        Returns the relative path string on success, or None if any part of
+        the chain is missing.
+        """
+        current = ''
+        for part in parts:
+            try:
+                children = client.list_folder(device, current)
+            except Exception:
+                return None
+            if part not in children:
+                return None
+            current = f'{current}/{part}' if current else part
+        return current
+
+    def _linux_read_missions(self, client, device, rel_path):
+        """
+        List UUID mission folders at rel_path on the device and copy each
+        mission's KMZ into a fresh temp dir to read its metadata.
+
+        Returns (missions, tmp_dir); caller is responsible for cleaning up
+        tmp_dir (mirrors the Windows helpers' try/finally pattern).
+        """
+        tmp_dir = tempfile.mkdtemp(prefix='flypath_')
+        try:
+            entries = client.list_folder(device, rel_path)
+        except Exception:
+            entries = []
+
+        has_mp = 'map_preview' in entries
+        preview = set()
+        if has_mp:
+            try:
+                preview = set(client.list_folder(device, rel_path + '/map_preview'))
+            except Exception:
+                preview = set()
+
+        missions = []
+        for u in entries:
+            if not self._UUID_RE.match(u):
+                continue
+            if has_mp and u not in preview:
+                continue
+            try:
+                client.copy_from_device_to_exact(
+                    device, f'{rel_path}/{u}/{u}.kmz',
+                    os.path.join(tmp_dir, u + '.kmz'),
+                )
+            except Exception:
+                pass
+            kmz = os.path.join(tmp_dir, u + '.kmz')
+            create_ms, n_wp = (self._read_kmz_meta(kmz)
+                               if os.path.exists(kmz) else (0, 0))
+            missions.append({
+                'uuid': u, 'create_ms': create_ms,
+                'date_str': self._fmt_ms(create_ms), 'n_wp': n_wp,
+            })
+        missions.sort(key=lambda m: m['create_ms'] or 0, reverse=True)
+        return missions, tmp_dir
+
+    def _list_shell_children_linux(self, parts):
+        """
+        Linux: return the child "folder" names one level below `parts`.
+
+        parts == []            -> connected MTP device display names
+        parts == [device, ...] -> that device's folder tree, navigated by name
+        """
+        client = _get_mtp_client()
+        if client is None:
+            return []
+        try:
+            if not parts:
+                return [client.get_display_name(d) for d in client.list_devices()]
+            device = self._linux_resolve_device(client, parts[0])
+            if device is None:
+                return []
+            rel_path = self._linux_navigate(client, device, parts[1:])
+            if rel_path is None and len(parts) > 1:
+                return []
+            return client.list_folder(device, rel_path or '')
+        except Exception:
+            return []
+
+    def _list_missions_at_path_linux(self, parts):
+        """
+        Linux: navigate a chosen device path (from the manual browser) and
+        list its waypoint missions.
+        Returns (status, missions) with status 'ok' / 'no_mission' / 'error'.
+        """
+        client = _get_mtp_client()
+        if client is None or not parts:
+            return ('error', [])
+        device = self._linux_resolve_device(client, parts[0])
+        if device is None:
+            return ('error', [])
+        rel_path = self._linux_navigate(client, device, parts[1:])
+        if rel_path is None:
+            return ('error', [])
+        missions, tmp_dir = self._linux_read_missions(client, device, rel_path)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return ('ok' if missions else 'no_mission', missions)
+
+    def _list_rc_missions_linux(self):
+        """
+        Linux: scan connected MTP devices for the DJI waypoint folder and
+        return all missions found there.
+
+        Returns (status, waypoint_path, missions, detail) — same contract as
+        _list_rc_missions_windows(). waypoint_path is a '/'-joined string of
+        [device_display_name] + path parts, re-parsed by
+        _export_to_mtp_rc_linux() on export.
+        """
+        client = _get_mtp_client()
+        if client is None:
+            return ('error', None, [],
+                    'No MTP backend detected on this system.\n\n'
+                    'Install gvfs-backends (GNOME) or kio-extras (KDE), '
+                    'connect the RC via USB, open it once in your file '
+                    'manager so it gets mounted, then try again.')
+
+        try:
+            devices = client.list_devices()
+        except Exception as exc:
+            return ('error', None, [], f'MTP scan failed: {exc}')
+
+        if not devices:
+            return ('not_connected', None, [], '')
+
+        device_seen = False
+        for device in devices:
+            disp = client.get_display_name(device)
+            if re.search('DJI|RC', disp, re.IGNORECASE):
+                device_seen = True
+
+            try:
+                top_folders = client.list_folder(device, '')
+            except Exception:
+                top_folders = []
+            candidate_bases = [[]] + [[t] for t in top_folders]
+
+            for base in candidate_bases:
+                rel_path = self._linux_navigate(client, device, base + _RC_REL_PARTS)
+                if rel_path is None:
+                    continue
+                device_seen = True
+                missions, tmp_dir = self._linux_read_missions(client, device, rel_path)
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+                wp_path = '/'.join([disp] + base + list(_RC_REL_PARTS))
+                if not missions:
+                    return ('no_mission', wp_path, [], '')
+                return ('ok', wp_path, missions, '')
+
+        return ('no_mission', None, [], '') if device_seen else ('not_connected', None, [], '')
+
+    @staticmethod
+    def _linux_remove_remote(client, device, rel_path):
+        """
+        Best-effort delete of a file on the MTP device before overwriting it.
+        gio/kioclient5 copy can refuse to overwrite an existing destination,
+        unlike a plain filesystem copy, so this is called first.
+        """
+        try:
+            if client.backend == 'kio':
+                subprocess.run(['kioclient5', 'remove', f'mtp:/{device}/{rel_path}'],
+                                capture_output=True, text=True, timeout=15)
+            elif device.startswith('mtp://'):
+                subprocess.run(['gio', 'remove', device.rstrip('/') + '/' + rel_path],
+                                capture_output=True, text=True, timeout=15)
+            else:
+                full = os.path.join(device, rel_path)
+                if os.path.exists(full):
+                    os.remove(full)
+        except Exception:
+            pass
+
+    def _export_to_mtp_rc_linux(self, rc_dir, mission, waypoints, target_uuid=None):
+        """
+        Linux: export the KMZ directly to a DJI RC connected as an MTP
+        device, via gvfs (GNOME) or KIO (KDE).
+
+        rc_dir is the '/'-joined [device_display_name, *path_parts] string
+        produced by _list_rc_missions_linux() / the manual browser.
+
+        Returns (success: bool, detail: str) — same contract as the Windows
+        implementation.
+        """
+        client = _get_mtp_client()
+        if client is None:
+            return False, (
+                'No MTP backend detected on this system.\n\n'
+                'Install gvfs-backends (GNOME) or kio-extras (KDE), check '
+                'the RC is still connected via USB, then retry.'
+            )
+
+        parts = [p for p in rc_dir.split('/') if p]
+        if not parts:
+            return False, f'Invalid RC path: {rc_dir}'
+        disp_name, rel_parts = parts[0], parts[1:]
+
+        device = self._linux_resolve_device(client, disp_name)
+        if device is None:
+            return False, f'DJI RC "{disp_name}" is no longer connected.'
+        rel_path = '/'.join(rel_parts)
+
+        if target_uuid:
+            uuid_name = target_uuid
+        else:
+            try:
+                entries = client.list_folder(device, rel_path)
+            except Exception as exc:
+                return False, f'Could not read the RC waypoint folder: {exc}'
+            uuids = [e for e in entries if self._UUID_RE.match(e)]
+            if not uuids:
+                return False, (
+                    'No valid mission folder found on the RC.\n\n'
+                    'Open DJI Fly on the RC, create a waypoint mission '
+                    '(even a 3-point dummy), then export again.'
+                )
+            uuid_name = uuids[0]
+
+        tmp_dir = tempfile.mkdtemp(prefix='flypath_')
+        try:
+            tmp_kmz = os.path.join(tmp_dir, uuid_name + '.kmz')
+            try:
+                self._write_mission_kmz(tmp_kmz, waypoints, mission)
+            except Exception as exc:
+                return False, f'Could not write KMZ: {exc}'
+
+            dest_rel = f'{rel_path}/{uuid_name}/{uuid_name}.kmz'
+            self._linux_remove_remote(client, device, dest_rel)
+            try:
+                client.copy_to_device(tmp_kmz, device, dest_rel)
+            except Exception as exc:
+                return False, (
+                    f'Copy to RC failed.\n\n{exc}\n\n'
+                    'Check the RC is still connected and unlocked.'
+                )
+            return True, uuid_name
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
