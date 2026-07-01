@@ -28,6 +28,9 @@ _DRONE_ENUM = {
     'DJI Mini 3 Pro': 97,   # community-verified
     'DJI Mini 4 Pro': 68,   # verified from native RC2 mission dump
     'DJI Mini 5 Pro': 68,   # community-verified: same enum as Mini 4 Pro, confirmed to fly on RC2
+    'DJI Air 3 (16:9) 12 MP': 68,
+    'DJI Air 3 (4:3) 12 MP': 68,
+    'DJI Air 3 4:3) 48MP': 68,
 }
 
 # ── Finish action mapping ──────────────────────────────────────────────────
