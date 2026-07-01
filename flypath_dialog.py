@@ -104,33 +104,26 @@ except Exception:
 # a real filesystem path) is already OS-agnostic and untouched.
 _IS_WINDOWS = sys.platform.startswith('win')
 
-_mtp_client_cache = {'client': None, 'tried': False}
+_mtp_client_cache = {'client': None}
 
 
 def _get_mtp_client():
-    """Lazily create and cache the Linux MTPClient.
+    """Return the Linux MTPClient, (re)detecting the backend each time the
+    previous attempt failed.
 
-    Returns None (rather than raising) if no backend (gvfs/KIO) is available,
-    so callers can show a friendly message instead of crashing.
+    Only a *successful* detection is cached. A failure is never cached,
+    because the RC is often plugged in (or mounted) after the user's first
+    "Auto Detect RC" click — caching that failure would keep reporting
+    "not detected" for the rest of the session even once the device is
+    ready.
     """
-    if _mtp_client_cache['tried']:
+    if _mtp_client_cache['client'] is not None:
         return _mtp_client_cache['client']
-    _mtp_client_cache['tried'] = True
     try:
         _mtp_client_cache['client'] = MTPClient()
     except Exception:
         _mtp_client_cache['client'] = None
     return _mtp_client_cache['client']
-
-
-def _reset_mtp_client_cache():
-    """Force the next _get_mtp_client() call to re-detect the backend.
-
-    Useful after the user plugs in / powers on the RC mid-session, since the
-    gvfs/KIO daemon may not have been running at first detection.
-    """
-    _mtp_client_cache['client'] = None
-    _mtp_client_cache['tried'] = False
 
 
 # ── Silent MTP copy via IFileOperation ────────────────────────────────────
@@ -267,7 +260,7 @@ DRONE_SPECS = {
         'info': '1/1.3" CMOS  ·  12 MP (mode 4:3, quad-bayer)  ·  24 mm equiv  ·  f/1.7',
     },
 
-    'DJI Air 3 (4:3) 48MP': {
+    'DJI Air 3 4:3) 48MP': {
         'sensor_width_mm': 9.6,
         'sensor_height_mm': 7.2,
         'focal_length_mm': 6.9,
@@ -523,7 +516,7 @@ class _RcFolderBrowser(QDialog):
             names = []
         finally:
             QApplication.restoreOverrideCursor()
-        for name in names:
+        for name in sorted(names, key=str.casefold):
             item = QTreeWidgetItem([name])
             item.setData(0, _ROLE_PARTS, parts + [name])
             item.setData(0, _ROLE_LOADED, False)
