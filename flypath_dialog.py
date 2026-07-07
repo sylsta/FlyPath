@@ -4,7 +4,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 import zipfile
 
@@ -15,18 +14,27 @@ from qgis.PyQt.QtWidgets import (
     QSpinBox, QDoubleSpinBox,
     QMessageBox, QFileDialog, QApplication,
     QStackedWidget, QDialog, QTreeWidget, QTreeWidgetItem, QDialogButtonBox,
+    QGraphicsView, QGraphicsScene,
 )
-from qgis.PyQt.QtCore import Qt, QObject, QEvent, QSettings, QVariant
-from qgis.PyQt.QtGui import QColor, QFont
+from qgis.PyQt.QtCore import (
+    Qt, QObject, QEvent, QSettings, QVariant, QSize, QPointF, pyqtSignal,
+)
+from qgis.PyQt.QtGui import QColor, QFont, QPixmap, QPainter, QPen, QPolygonF
 
 try:
     _AlignLeft    = Qt.AlignmentFlag.AlignLeft
     _AlignVCenter = Qt.AlignmentFlag.AlignVCenter
+    _AlignCenter  = Qt.AlignmentFlag.AlignCenter
     _EventEnter   = QEvent.Type.Enter
     _EventLeave   = QEvent.Type.Leave
     _FrameNoFrame = QFrame.Shape.NoFrame
     _FontBold     = QFont.Weight.Bold
     _WaitCursor   = Qt.CursorShape.WaitCursor
+    _KeepAspect   = Qt.AspectRatioMode.KeepAspectRatio
+    _SmoothTrans  = Qt.TransformationMode.SmoothTransformation
+    _ScrollHandDrag  = QGraphicsView.DragMode.ScrollHandDrag
+    _AnchorUnderMouse = QGraphicsView.ViewportAnchor.AnchorUnderMouse
+    _Antialias    = QPainter.RenderHint.Antialiasing
     _MB_YES       = QMessageBox.StandardButton.Yes
     _MB_NO        = QMessageBox.StandardButton.No
     _DBB_OK       = QDialogButtonBox.StandardButton.Ok
@@ -34,11 +42,17 @@ try:
 except AttributeError:
     _AlignLeft    = Qt.AlignLeft
     _AlignVCenter = Qt.AlignVCenter
+    _AlignCenter  = Qt.AlignCenter
     _EventEnter   = QEvent.Enter
     _EventLeave   = QEvent.Leave
     _FrameNoFrame = QFrame.NoFrame
     _FontBold     = QFont.Bold
     _WaitCursor   = Qt.WaitCursor
+    _KeepAspect   = Qt.KeepAspectRatio
+    _SmoothTrans  = Qt.SmoothTransformation
+    _ScrollHandDrag  = QGraphicsView.ScrollHandDrag
+    _AnchorUnderMouse = QGraphicsView.AnchorUnderMouse
+    _Antialias    = QPainter.Antialiasing
     _MB_YES       = QMessageBox.Yes
     _MB_NO        = QMessageBox.No
     _DBB_OK       = QDialogButtonBox.Ok
@@ -65,7 +79,6 @@ from qgis.core import (
 from .map_tools import PolygonDrawTool
 from .grid_planner import generate_flight_grid, find_optimal_direction
 from .wpml_writer import write_kmz
-from .mtp_access_kio_gvfs import MTPClient
 
 
 # ── MTP PowerShell exit codes ─────────────────────────────────────────────
@@ -93,38 +106,6 @@ try:
     _STARTUPINFO.wShowWindow = 0   # SW_HIDE
 except Exception:
     _STARTUPINFO = None
-
-# ── Platform dispatch ──────────────────────────────────────────────────────
-# The RC-export machinery below has two implementations:
-#   - Windows: PowerShell + COM (Shell.Application / IFileOperation), because
-#     Windows exposes the DJI RC (an MTP device) under "This PC".
-#   - Linux: the mtp_access_kio_gvfs module, which talks to whichever backend
-#     the desktop environment provides (gvfs on GNOME, KIO on KDE).
-# Everything else (local export, folder-based RC export, mission listing from
-# a real filesystem path) is already OS-agnostic and untouched.
-_IS_WINDOWS = sys.platform.startswith('win')
-
-_mtp_client_cache = {'client': None}
-
-
-def _get_mtp_client():
-    """Return the Linux MTPClient, (re)detecting the backend each time the
-    previous attempt failed.
-
-    Only a *successful* detection is cached. A failure is never cached,
-    because the RC is often plugged in (or mounted) after the user's first
-    "Auto Detect RC" click — caching that failure would keep reporting
-    "not detected" for the rest of the session even once the device is
-    ready.
-    """
-    if _mtp_client_cache['client'] is not None:
-        return _mtp_client_cache['client']
-    try:
-        _mtp_client_cache['client'] = MTPClient()
-    except Exception:
-        _mtp_client_cache['client'] = None
-    return _mtp_client_cache['client']
-
 
 # ── Silent MTP copy via IFileOperation ────────────────────────────────────
 # Shell.CopyHere ignores FOF_NOCONFIRMATION/FOF_SILENT for MTP devices, so it
@@ -238,39 +219,6 @@ DRONE_SPECS = {
         'battery_time_min':  45,
         'info': '1" CMOS  ·  50 MP  ·  24 mm equiv',
     },
-    'DJI Air 3 (16:9) 12 MP': {
-        'sensor_width_mm': 9.6,
-        'sensor_height_mm': 5.4,  # recalculé proportionnellement au crop 16:9
-        'focal_length_mm': 6.9,
-        'image_width_px': 4032,
-        'image_height_px': 2268,
-        'max_speed_ms': 21.0,
-        'battery_time_min': 46,
-        'info': '1/1.3" CMOS  ·  crop 16:9  ·  24 mm equiv  ·  f/1.7',
-    },
-
-    'DJI Air 3 (4:3) 12 MP': {
-        'sensor_width_mm': 9.6,
-        'sensor_height_mm': 7.2,
-        'focal_length_mm': 6.9,
-        'image_width_px': 4032,
-        'image_height_px': 3024,
-        'max_speed_ms': 21.0,
-        'battery_time_min': 46,
-        'info': '1/1.3" CMOS  ·  12 MP (mode 4:3, quad-bayer)  ·  24 mm equiv  ·  f/1.7',
-    },
-
-    'DJI Air 3 4:3) 48MP': {
-        'sensor_width_mm': 9.6,
-        'sensor_height_mm': 7.2,
-        'focal_length_mm': 6.9,
-        'image_width_px': 8064,
-        'image_height_px': 6048,
-        'max_speed_ms': 21.0,
-        'battery_time_min': 46,
-        'info': '1/1.3" CMOS  ·  48 MP natif (pleine résolution capteur)  ·  24 mm equiv  ·  f/1.7',
-    },
-
 }
 
 # ── Dark stylesheet (Litchi-inspired) ─────────────────────────────────────
@@ -412,6 +360,14 @@ QLabel#rcNote {
     border-left: 3px solid #2D6DB5;
     border-radius: 3px;
 }
+QLabel#rcThumb {
+    color: #6A7686;
+    font-size: 10px;
+    background-color: #15181E;
+    border: 1px solid #2A2D35;
+    border-radius: 3px;
+    padding: 2px;
+}
 QLabel#infoBar {
     color: #7FB3E8;
     font-size: 10px;
@@ -516,7 +472,7 @@ class _RcFolderBrowser(QDialog):
             names = []
         finally:
             QApplication.restoreOverrideCursor()
-        for name in sorted(names, key=str.casefold):
+        for name in names:
             item = QTreeWidgetItem([name])
             item.setData(0, _ROLE_PARTS, parts + [name])
             item.setData(0, _ROLE_LOADED, False)
@@ -541,6 +497,55 @@ class _RcFolderBrowser(QDialog):
         return item.data(0, _ROLE_PARTS) if item else None
 
 
+class _ClickableLabel(QLabel):
+    """A QLabel that emits `clicked` when it holds an image and is pressed."""
+    clicked = pyqtSignal()
+
+    def mousePressEvent(self, event):
+        pm = self.pixmap()
+        if pm is not None and not pm.isNull():
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+
+class _ZoomView(QGraphicsView):
+    """QGraphicsView with mouse-wheel zoom (drag-to-pan is set by the caller)."""
+
+    def wheelEvent(self, event):
+        factor = 1.25 if event.angleDelta().y() > 0 else 1 / 1.25
+        self.scale(factor, factor)
+
+
+class _ThumbnailViewer(QDialog):
+    """A resizable window showing the full mission image with zoom and pan."""
+
+    def __init__(self, image_path, title, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.resize(900, 560)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
+
+        self._view = _ZoomView()
+        self._view.setDragMode(_ScrollHandDrag)
+        self._view.setTransformationAnchor(_AnchorUnderMouse)
+        scene = QGraphicsScene(self)
+        self._item = scene.addPixmap(QPixmap(image_path))
+        self._item.setTransformationMode(_SmoothTrans)
+        self._view.setScene(scene)
+        layout.addWidget(self._view, 1)
+
+        hint = QLabel('Scroll to zoom  ·  drag to pan')
+        hint.setAlignment(_AlignCenter)
+        layout.addWidget(hint)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._view.fitInView(self._item, _KeepAspect)
+
+
 class FlyPathDialog(QWidget):
 
     def __init__(self, iface, parent=None):
@@ -560,6 +565,9 @@ class FlyPathDialog(QWidget):
         self._waypoints          = []
         self._shot_spacing_m     = 0.0
         self._rc_waypoint_path   = None   # detected RC waypoint folder display path
+        self._thumb_dir          = None   # session cache for pulled RC mission thumbnails
+        self._current_thumb_full = None   # full-res preview path for the zoom viewer
+        self._render_cache       = {}     # uuid -> rendered waypoint preview path
 
         self._build_ui()
         self._setup_combos()
@@ -610,9 +618,28 @@ class FlyPathDialog(QWidget):
 
         scroll_layout.addWidget(self._build_mission_group())
         scroll_layout.addWidget(self._build_area_group())
-        scroll_layout.addWidget(self._build_flight_group())
-        scroll_layout.addWidget(self._build_camera_group())
-        scroll_layout.addWidget(self._build_advanced_group())
+
+        # Flight Parameters (left) beside Camera Settings + Safety Actions
+        # (right), which together are about the same height.
+        params_row = QHBoxLayout()
+        params_row.setSpacing(8)
+
+        flight_col = QVBoxLayout()
+        flight_col.setSpacing(8)
+        flight_col.addWidget(self._build_flight_group())
+        flight_col.addStretch()
+
+        cam_col = QVBoxLayout()
+        cam_col.setSpacing(8)
+        cam_col.addWidget(self._build_camera_group())
+        cam_col.addWidget(self._build_advanced_group())
+        cam_col.addStretch()
+
+        params_row.addLayout(flight_col, 1)
+        params_row.addLayout(cam_col, 1)
+        scroll_layout.addLayout(params_row)
+
+        # Statistics full width below, itself split into two columns.
         scroll_layout.addWidget(self._build_stats_group())
         scroll_layout.addStretch()
 
@@ -620,6 +647,15 @@ class FlyPathDialog(QWidget):
         outer.addWidget(scroll, 1)
         outer.addWidget(self.infoBar)
         outer.addWidget(self._build_action_bar())
+
+        # Let the dock shrink only down to the natural minimum width of its
+        # content (where the two-column sections still fit), not smaller. The
+        # scroll area would otherwise let the content be squeezed indefinitely.
+        content.layout().activate()
+        # + vertical scrollbar allowance so the content is not clipped at min;
+        # small floor guards against a degenerate hint before the first show.
+        min_w = content.minimumSizeHint().width() + 20
+        self.setMinimumWidth(max(min_w, 280))
 
     def _build_mission_group(self):
         group = QGroupBox('Mission Setup')
@@ -792,6 +828,7 @@ class FlyPathDialog(QWidget):
 
     def _build_camera_group(self):
         group = QGroupBox('Camera Settings')
+        group.setMaximumWidth(210)
         form  = QFormLayout(group)
         form.setLabelAlignment(_AlignLeft | _AlignVCenter)
         form.setSpacing(6)
@@ -801,6 +838,7 @@ class FlyPathDialog(QWidget):
         self.gimbalAngleSpin.setValue(-90)
         self.gimbalAngleSpin.setSingleStep(5)
         self.gimbalAngleSpin.setSuffix(' °')
+        self.gimbalAngleSpin.setMaximumWidth(110)
         self._tip(self.gimbalAngleSpin,
             'Gimbal pitch angle. -90° points straight down (nadir) for '
             '2D orthomosaic mapping. Tilt toward 0° for oblique photography.')
@@ -812,6 +850,7 @@ class FlyPathDialog(QWidget):
         self.photoIntervalSpin.setSingleStep(0.5)
         self.photoIntervalSpin.setDecimals(1)
         self.photoIntervalSpin.setSuffix(' s')
+        self.photoIntervalSpin.setMaximumWidth(110)
         self._tip(self.photoIntervalSpin,
             'Time between each photo in seconds. The drone uses auto interval '
             'shooting — minimum 2 s at 12 MP JPEG (DJI Mini 4 Pro / Mini 3 Pro). '
@@ -838,11 +877,13 @@ class FlyPathDialog(QWidget):
 
     def _build_advanced_group(self):
         group = QGroupBox('Safety Actions')
+        group.setMaximumWidth(210)
         form  = QFormLayout(group)
         form.setLabelAlignment(_AlignLeft | _AlignVCenter)
         form.setSpacing(6)
 
         self.finishActionCombo = QComboBox()
+        self.finishActionCombo.setMaximumWidth(110)
         self._tip(self.finishActionCombo,
             'What the drone does after the last waypoint. '
             'Return to Home: flies back and lands at takeoff. '
@@ -851,6 +892,7 @@ class FlyPathDialog(QWidget):
         form.addRow('Finish Action', self.finishActionCombo)
 
         self.rcLostActionCombo = QComboBox()
+        self.rcLostActionCombo.setMaximumWidth(110)
         self._tip(self.rcLostActionCombo,
             'What the drone does if the RC signal is lost during the mission. '
             'Return to Home: flies back to takeoff point. '
@@ -863,32 +905,38 @@ class FlyPathDialog(QWidget):
 
     def _build_stats_group(self):
         group = QGroupBox('Statistics')
-        form  = QFormLayout(group)
-        form.setLabelAlignment(_AlignLeft | _AlignVCenter)
-        form.setSpacing(6)
+        outer = QHBoxLayout(group)
+        outer.setSpacing(14)
 
-        stats = [
+        left_stats = [
             ('flightTimeLabel', 'Flight Time',
              'Estimated total flight duration based on path length and speed. '
              'Does not include takeoff, landing, or battery swap time.'),
             ('distanceLabel',   'Distance',
              'Total distance the drone will fly along all flight lines.'),
-            ('photosLabel',     'Photos',
-             'Estimated number of photos the camera will take during the mission.'),
+            ('coverageLabel',   'Coverage',
+             'Total survey area in hectares as calculated from the polygon.'),
+        ]
+        right_stats = [
             ('linesLabel',      'Flight Lines',
              'Number of parallel flight lines needed to cover the survey area.'),
             ('batteriesLabel',  'Batteries',
              'Estimated number of battery charges needed to complete the mission, '
              'based on the drone\'s rated endurance at the selected speed.'),
-            ('coverageLabel',   'Coverage',
-             'Total survey area in hectares as calculated from the polygon.'),
+            ('photosLabel',     'Photos',
+             'Estimated number of photos the camera will take during the mission.'),
         ]
-        for attr, caption, tip in stats:
-            lbl = QLabel('—')
-            lbl.setObjectName(attr)
-            self._tip(lbl, tip)
-            setattr(self, attr, lbl)
-            form.addRow(caption, lbl)
+        for stats in (left_stats, right_stats):
+            form = QFormLayout()
+            form.setLabelAlignment(_AlignLeft | _AlignVCenter)
+            form.setSpacing(6)
+            for attr, caption, tip in stats:
+                lbl = QLabel('—')
+                lbl.setObjectName(attr)
+                self._tip(lbl, tip)
+                setattr(self, attr, lbl)
+                form.addRow(caption, lbl)
+            outer.addLayout(form, 1)
 
         return group
 
@@ -1050,6 +1098,18 @@ class FlyPathDialog(QWidget):
             'Match it by date with what you see in DJI Fly.')
         v.addWidget(self.rcMissionCombo)
 
+        # DJI's own map snapshot of the selected mission, so you can see what
+        # you are about to replace. Click to open a zoomable full-size viewer.
+        self.rcThumbLabel = _ClickableLabel('')
+        self.rcThumbLabel.setObjectName('rcThumb')
+        self.rcThumbLabel.setAlignment(_AlignCenter)
+        self.rcThumbLabel.setMinimumHeight(120)
+        self.rcThumbLabel.setWordWrap(True)
+        self._tip(self.rcThumbLabel,
+            'Flight path of the selected mission, drawn from its waypoints so it '
+            'always matches the RC. Click it to open a larger, zoomable view.')
+        v.addWidget(self.rcThumbLabel)
+
         self.rcNote = QLabel(
             'ⓘ  FlyPath replaces an existing mission. To add a new one, create '
             'it in DJI Fly first, then Auto Detect RC.')
@@ -1116,7 +1176,8 @@ class FlyPathDialog(QWidget):
         self.localFolderEdit.textChanged.connect(self._on_local_folder_changed)
         self.rcRefreshBtn.clicked.connect(self._on_refresh_rc_missions)
         self.rcManualBtn.clicked.connect(self._on_locate_folder_manually)
-        self.rcMissionCombo.currentIndexChanged.connect(self._update_export_button)
+        self.rcMissionCombo.currentIndexChanged.connect(self._on_rc_mission_selected)
+        self.rcThumbLabel.clicked.connect(self._open_thumbnail_viewer)
         self.drawPolygonBtn.clicked.connect(self._on_draw_polygon)
         self.removePolygonBtn.clicked.connect(self._on_remove_drawn_polygon)
         self.autoDirectionBtn.clicked.connect(self._on_auto_direction)
@@ -1591,9 +1652,16 @@ class FlyPathDialog(QWidget):
             self._prev_map_tool = None
 
     def _cancel_draw_tool(self):
-        if self._draw_tool:
-            self.iface.mapCanvas().unsetMapTool(self._draw_tool)
-            self._draw_tool = None
+        """Stop drawing, restore the previous map tool, and reset the button."""
+        canvas = self.iface.mapCanvas()
+        if self._prev_map_tool is not None:
+            canvas.setMapTool(self._prev_map_tool)   # deactivates the draw tool
+            self._prev_map_tool = None
+        elif self._draw_tool is not None:
+            canvas.unsetMapTool(self._draw_tool)
+        self._draw_tool = None
+        self.drawPolygonBtn.setChecked(False)
+        self.drawPolygonBtn.setText('Draw Polygon on Map')
 
     def _area_ha(self):
         """Return survey polygon area in hectares (metric, via EPSG:3857)."""
@@ -1861,7 +1929,110 @@ class FlyPathDialog(QWidget):
         for m in (missions or []):
             self.rcMissionCombo.addItem(self._mission_label(m), m)
         self.rcMissionCombo.blockSignals(False)
+        # Signals were blocked, so drive the selection-dependent UI directly.
         self._update_export_button()
+        self._load_selected_thumbnail()
+
+    def _on_rc_mission_selected(self, _=None):
+        self._update_export_button()
+        self._load_selected_thumbnail()
+
+    # ── Mission thumbnail preview ──────────────────────────────────────────
+
+    def _thumb_cache_dir(self):
+        if not self._thumb_dir:
+            self._thumb_dir = tempfile.mkdtemp(prefix='flypath_thumbs_')
+        return self._thumb_dir
+
+    def _load_selected_thumbnail(self):
+        """Draw a preview of the selected RC mission from its waypoints."""
+        self._current_thumb_full = None
+        mission = self.rcMissionCombo.currentData()
+        if not mission:
+            self.rcThumbLabel.setPixmap(QPixmap())
+            self.rcThumbLabel.setText('')
+            return
+        path = self._mission_preview_path(mission)
+        self._current_thumb_full = path
+        pix = QPixmap(path) if path else QPixmap()
+        if not pix.isNull():
+            self.rcThumbLabel.setText('')
+            self.rcThumbLabel.setPixmap(
+                pix.scaled(QSize(240, 135), _KeepAspect, _SmoothTrans)
+            )
+        else:
+            self.rcThumbLabel.setPixmap(QPixmap())
+            self.rcThumbLabel.setText('No waypoints to preview')
+
+    def _mission_preview_path(self, mission):
+        """Rendered preview of the mission's waypoints, cached per mission UUID."""
+        uuid = mission['uuid']
+        cached = self._render_cache.get(uuid)
+        if cached and os.path.isfile(cached):
+            return cached
+        path = self._render_mission_preview(mission.get('waypoints') or [], uuid)
+        if path:
+            self._render_cache[uuid] = path
+        return path
+
+    def _render_mission_preview(self, waypoints, uuid):
+        """
+        Draw the mission's flight path from its waypoints. Rendered from the KMZ
+        (the source of truth), so it always matches what is on the RC — unlike
+        DJI's static thumbnail, which is not regenerated after a replace.
+        Returns a local image path, or None when there are no waypoints.
+        """
+        if not waypoints:
+            return None
+        W, H, pad = 1200, 675, 48
+        pix = QPixmap(W, H)
+        pix.fill(QColor('#EDEAE2'))
+        painter = QPainter(pix)
+        try:
+            painter.setRenderHint(_Antialias, True)
+            lons = [c[0] for c in waypoints]
+            lats = [c[1] for c in waypoints]
+            minx, maxx = min(lons), max(lons)
+            miny, maxy = min(lats), max(lats)
+            dx = (maxx - minx) or 1e-9
+            dy = (maxy - miny) or 1e-9
+            s  = min((W - 2 * pad) / dx, (H - 2 * pad) / dy)
+            ox = (W - s * dx) / 2.0
+            oy = (H - s * dy) / 2.0
+
+            def to_px(lon, lat):
+                return QPointF(ox + (lon - minx) * s,
+                               H - (oy + (lat - miny) * s))   # flip Y
+
+            pts = [to_px(lon, lat) for lon, lat in waypoints]
+            pen = QPen(QColor('#2ECC71'))
+            pen.setWidth(4)
+            painter.setPen(pen)
+            painter.drawPolyline(QPolygonF(pts))
+            painter.setPen(QColor('#25A05A'))
+            painter.setBrush(QColor('#2ECC71'))
+            for pt in pts:
+                painter.drawEllipse(pt, 5, 5)
+            painter.setBrush(QColor(_COLOR_START_MARKER))
+            painter.drawEllipse(pts[0], 8, 8)
+            painter.setBrush(QColor(_COLOR_END_MARKER))
+            painter.drawEllipse(pts[-1], 8, 8)
+        finally:
+            painter.end()
+
+        path = os.path.join(self._thumb_cache_dir(), uuid + '_wp.jpg')
+        pix.save(path, 'JPG', 90)
+        return path
+
+    def _open_thumbnail_viewer(self):
+        """Open the full-size, zoomable/pannable view of the selected mission."""
+        if not (self._current_thumb_full and os.path.isfile(self._current_thumb_full)):
+            return
+        mission = self.rcMissionCombo.currentData()
+        title = 'Mission preview'
+        if mission:
+            title = 'Mission  ' + (mission.get('date_str') or mission['uuid'])
+        _ThumbnailViewer(self._current_thumb_full, title, self).exec()
 
     def _set_rc_target(self, path):
         """Record the chosen waypoint folder and show it in the panel."""
@@ -2011,12 +2182,6 @@ class FlyPathDialog(QWidget):
 
     def _list_shell_children(self, parts):
         """Return the child folder names of a shell path (parts from This PC)."""
-        if not _IS_WINDOWS:
-            return self._list_shell_children_linux(parts)
-        return self._list_shell_children_windows(parts)
-
-    def _list_shell_children_windows(self, parts):
-        """Windows: return the child folder names of a shell path (This PC)."""
         ps_exe = os.path.join(
             os.environ.get('SystemRoot', r'C:\Windows'),
             r'System32\WindowsPowerShell\v1.0\powershell.exe'
@@ -2065,15 +2230,6 @@ class FlyPathDialog(QWidget):
         Navigate a chosen shell path and list its waypoint missions.
         Returns (status, missions) with status 'ok' / 'no_mission' / 'error'.
         """
-        if not _IS_WINDOWS:
-            return self._list_missions_at_path_linux(parts)
-        return self._list_missions_at_path_windows(parts)
-
-    def _list_missions_at_path_windows(self, parts):
-        """
-        Windows: navigate a chosen shell path and list its waypoint missions.
-        Returns (status, missions) with status 'ok' / 'no_mission' / 'error'.
-        """
         ps_exe = os.path.join(
             os.environ.get('SystemRoot', r'C:\Windows'),
             r'System32\WindowsPowerShell\v1.0\powershell.exe'
@@ -2098,10 +2254,12 @@ class FlyPathDialog(QWidget):
                      for ln in r.stdout.splitlines() if ln.startswith('UUID=')]
             missions = []
             for u in uuids:
-                create_ms, n_wp = self._read_kmz_meta(os.path.join(tmp_dir, u + '.kmz'))
+                create_ms, n_wp, wpts = self._read_kmz_meta(
+                    os.path.join(tmp_dir, u + '.kmz'))
                 missions.append({
                     'uuid': u, 'create_ms': create_ms,
                     'date_str': self._fmt_ms(create_ms), 'n_wp': n_wp,
+                    'waypoints': wpts,
                 })
             missions.sort(key=lambda m: m['create_ms'] or 0, reverse=True)
             return ('ok' if missions else 'no_mission', missions)
@@ -2175,11 +2333,12 @@ class FlyPathDialog(QWidget):
                 if has_mp and d not in preview:
                     continue
                 kmz = os.path.join(full, d + '.kmz')
-                create_ms, n_wp = (self._read_kmz_meta(kmz)
-                                   if os.path.exists(kmz) else (0, 0))
+                create_ms, n_wp, wpts = (self._read_kmz_meta(kmz)
+                                         if os.path.exists(kmz) else (0, 0, []))
                 missions.append({
                     'uuid': d, 'create_ms': create_ms,
                     'date_str': self._fmt_ms(create_ms), 'n_wp': n_wp,
+                    'waypoints': wpts,
                 })
             missions.sort(key=lambda m: m['create_ms'] or 0, reverse=True)
             return ('ok' if missions else 'no_mission', missions)
@@ -2189,21 +2348,6 @@ class FlyPathDialog(QWidget):
     def _list_rc_missions(self):
         """
         Scan the connected RC and return all waypoint missions.
-
-        Returns (status, waypoint_path, missions, detail):
-          status 'ok'            -> missions is a list of dicts (newest first)
-          status 'no_mission'    -> an RC is connected but has no missions
-          status 'not_connected' -> no DJI RC detected
-          status 'error'         -> scan failed; detail holds the message
-        Each mission dict: {uuid, create_ms, date_str, n_wp}
-        """
-        if not _IS_WINDOWS:
-            return self._list_rc_missions_linux()
-        return self._list_rc_missions_windows()
-
-    def _list_rc_missions_windows(self):
-        """
-        Windows: scan the connected RC and return all waypoint missions.
 
         Returns (status, waypoint_path, missions, detail):
           status 'ok'            -> missions is a list of dicts (newest first)
@@ -2253,12 +2397,13 @@ class FlyPathDialog(QWidget):
             missions = []
             for u in uuids:
                 kmz = os.path.join(tmp_dir, u + '.kmz')
-                create_ms, n_wp = self._read_kmz_meta(kmz)
+                create_ms, n_wp, wpts = self._read_kmz_meta(kmz)
                 missions.append({
                     'uuid': u,
                     'create_ms': create_ms,
                     'date_str': self._fmt_ms(create_ms),
                     'n_wp': n_wp,
+                    'waypoints': wpts,
                 })
             missions.sort(key=lambda m: m['create_ms'] or 0, reverse=True)
             if not missions:
@@ -2353,7 +2498,11 @@ class FlyPathDialog(QWidget):
 
     @staticmethod
     def _read_kmz_meta(kmz_path):
-        """Read (createTime_ms, waypoint_count) from a mission KMZ. Returns (0, 0) on failure."""
+        """
+        Read (createTime_ms, waypoint_count, waypoints) from a mission KMZ.
+        waypoints is a list of (lon, lat) parsed from the wayline Placemarks.
+        Returns (0, 0, []) on failure.
+        """
         try:
             with zipfile.ZipFile(kmz_path) as z:
                 template = z.read('wpmz/template.kml').decode('utf-8', 'replace')
@@ -2364,9 +2513,16 @@ class FlyPathDialog(QWidget):
             m = re.search(r'<wpml:createTime>(\d+)</wpml:createTime>', template)
             create_ms = int(m.group(1)) if m else 0
             n_wp = len(re.findall(r'<wpml:index>', waylines))
-            return create_ms, n_wp
+            waypoints = []
+            for lon, lat in re.findall(
+                    r'<coordinates>\s*(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)', waylines):
+                try:
+                    waypoints.append((float(lon), float(lat)))
+                except ValueError:
+                    pass
+            return create_ms, n_wp, waypoints
         except Exception:
-            return 0, 0
+            return 0, 0, []
 
     @staticmethod
     def _fmt_ms(create_ms):
@@ -2381,18 +2537,13 @@ class FlyPathDialog(QWidget):
             return 'unknown date'
 
     def _open_in_explorer(self, filepath):
-        """Open the system file manager with the exported file's folder."""
+        """Open File Explorer with the exported file selected."""
         try:
-            if _IS_WINDOWS:
-                subprocess.Popen(['explorer', '/select,', os.path.normpath(filepath)])
-            else:
-                # xdg-open has no "select this file" equivalent across file
-                # managers, so open the containing folder instead.
-                subprocess.Popen(['xdg-open', os.path.dirname(os.path.abspath(filepath))])
+            subprocess.Popen(['explorer', '/select,', os.path.normpath(filepath)])
         except Exception:
             pass
 
-    def _write_mission_kmz(self, filepath, waypoints, mission):
+    def _write_mission_kmz(self, filepath, waypoints, mission, create_time_ms=None):
         """Write the KMZ file using current UI parameter values."""
         write_kmz(
             filepath=filepath,
@@ -2404,6 +2555,7 @@ class FlyPathDialog(QWidget):
             rc_lost_action_label=self.rcLostActionCombo.currentText(),
             gimbal_pitch=self.gimbalAngleSpin.value(),
             mission_name=mission,
+            create_time_ms=create_time_ms,
         )
 
     @staticmethod
@@ -2491,12 +2643,15 @@ class FlyPathDialog(QWidget):
         # No extra confirmation dialog: the mission was already chosen in the
         # picker and the Export button names it ("Replace ... on RC").
         label = self._mission_display(target)
+        # Keep the mission's original createTime so its date still matches
+        # DJI Fly (DJI keeps the name; only the waypoints change).
+        create_ms = target.get('create_ms') or None
 
         if os.path.isdir(self._rc_waypoint_path):
             # Manually located folder (SD card / mapped drive / local copy):
             # a plain file write, no MTP transfer needed.
             ok, detail = self._export_to_folder_rc(target['uuid'], mission,
-                                                   waypoints)
+                                                   waypoints, create_ms)
         else:
             # Auto-detected MTP device path: copy over USB via Windows Shell.
             QApplication.setOverrideCursor(_WaitCursor)
@@ -2505,24 +2660,42 @@ class FlyPathDialog(QWidget):
             try:
                 ok, detail = self._export_to_mtp_rc(
                     self._rc_waypoint_path, mission, waypoints, shot_spacing_m,
-                    target_uuid=target['uuid'],
+                    target_uuid=target['uuid'], create_time_ms=create_ms,
                 )
             finally:
                 QApplication.restoreOverrideCursor()
                 self.infoBar.setText(_INFO_IDLE)
 
         if ok:
+            # The mission now holds our new waypoints (same date). Update the
+            # dropdown label and preview immediately, keyed by UUID, so nothing
+            # depends on the combo's stored dict or a fresh Auto Detect.
+            uuid = target['uuid']
+            target['waypoints'] = waypoints
+            target['n_wp'] = len(waypoints)
+            idx = self.rcMissionCombo.currentIndex()
+            if idx >= 0:
+                self.rcMissionCombo.setItemText(idx, self._mission_label(target))
+            rendered = self._render_mission_preview(waypoints, uuid)
+            if rendered:
+                self._render_cache[uuid] = rendered
+            else:
+                self._render_cache.pop(uuid, None)
+            self._load_selected_thumbnail()
+            self._update_export_button()
             QMessageBox.information(
                 self, 'Exported to RC',
                 f'Replaced "{label}" on the DJI RC.\n\n'
                 f'Waypoints: {len(waypoints):,}\n'
                 f'UUID: {detail}\n\n'
-                'Reopen DJI Fly on the RC to see the updated mission.'
+                'The preview now shows the mission you just uploaded. '
+                'Reopen DJI Fly on the RC to fly it (DJI refreshes its own '
+                'thumbnail when you open the mission).'
             )
         else:
             QMessageBox.critical(self, 'RC Export Failed', detail)
 
-    def _export_to_folder_rc(self, uuid, mission, waypoints):
+    def _export_to_folder_rc(self, uuid, mission, waypoints, create_time_ms=None):
         """Replace a mission inside a real filesystem waypoint folder.
 
         Returns (success: bool, detail: str) matching _export_to_mtp_rc.
@@ -2532,35 +2705,15 @@ class FlyPathDialog(QWidget):
             return False, f'Mission folder not found:\n{folder}'
         kmz = os.path.join(folder, uuid + '.kmz')
         try:
-            self._write_mission_kmz(kmz, waypoints, mission)
+            self._write_mission_kmz(kmz, waypoints, mission, create_time_ms)
         except Exception as exc:
             return False, str(exc)
         return True, uuid
 
     def _export_to_mtp_rc(self, rc_dir, mission, waypoints, shot_spacing_m,
-                          target_uuid=None):
+                          target_uuid=None, create_time_ms=None):
         """
         Export the KMZ directly to a DJI RC connected as an MTP device.
-
-        Dispatches to the Windows (PowerShell/COM) or Linux (gvfs/KIO)
-        implementation depending on the platform.
-
-        Returns (success: bool, detail: str)
-          success=True  → detail is the UUID that was replaced
-          success=False → detail is a human-readable error message
-        """
-        if not _IS_WINDOWS:
-            return self._export_to_mtp_rc_linux(
-                rc_dir, mission, waypoints, target_uuid=target_uuid
-            )
-        return self._export_to_mtp_rc_windows(
-            rc_dir, mission, waypoints, shot_spacing_m, target_uuid=target_uuid
-        )
-
-    def _export_to_mtp_rc_windows(self, rc_dir, mission, waypoints, shot_spacing_m,
-                          target_uuid=None):
-        """
-        Windows: export the KMZ directly to a DJI RC connected as an MTP device.
 
         Shell.Namespace() cannot resolve 'This PC\\...' paths directly.
         Instead we navigate step-by-step from the 'This PC' CLSID using
@@ -2596,275 +2749,11 @@ class FlyPathDialog(QWidget):
 
             tmp_kmz = os.path.join(tmp_dir, uuid_name + '.kmz')
             try:
-                self._write_mission_kmz(tmp_kmz, waypoints, mission)
+                self._write_mission_kmz(tmp_kmz, waypoints, mission, create_time_ms)
             except Exception as exc:
                 return False, f'Could not write KMZ: {exc}'
 
             return self._mtp_copy_kmz(ps_exe, nav, tmp_dir, uuid_name, tmp_kmz)
-        finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-
-    # ── Linux MTP support (gvfs / KIO via mtp_access_kio_gvfs) ─────────────
-    # These mirror the Windows Shell.Application logic above: try the device
-    # root plus each of its top-level folders as a candidate base, walk down
-    # _RC_REL_PARTS from there, and stop at the first one that resolves.
-
-    @staticmethod
-    def _linux_resolve_device(client, display_name):
-        """Find the MTPClient device identifier matching a display name."""
-        try:
-            for dev in client.list_devices():
-                if client.get_display_name(dev) == display_name:
-                    return dev
-        except Exception:
-            pass
-        return None
-
-    @staticmethod
-    def _linux_navigate(client, device, parts):
-        """
-        Walk down `parts` from the device root, checking at each level that
-        the next component actually appears in its parent's listing (rather
-        than blindly listing the terminal folder, which can't distinguish
-        "doesn't exist" from "empty").
-
-        Returns the relative path string on success, or None if any part of
-        the chain is missing.
-        """
-        current = ''
-        for part in parts:
-            try:
-                children = client.list_folder(device, current)
-            except Exception:
-                return None
-            if part not in children:
-                return None
-            current = f'{current}/{part}' if current else part
-        return current
-
-    def _linux_read_missions(self, client, device, rel_path):
-        """
-        List UUID mission folders at rel_path on the device and copy each
-        mission's KMZ into a fresh temp dir to read its metadata.
-
-        Returns (missions, tmp_dir); caller is responsible for cleaning up
-        tmp_dir (mirrors the Windows helpers' try/finally pattern).
-        """
-        tmp_dir = tempfile.mkdtemp(prefix='flypath_')
-        try:
-            entries = client.list_folder(device, rel_path)
-        except Exception:
-            entries = []
-
-        has_mp = 'map_preview' in entries
-        preview = set()
-        if has_mp:
-            try:
-                preview = set(client.list_folder(device, rel_path + '/map_preview'))
-            except Exception:
-                preview = set()
-
-        missions = []
-        for u in entries:
-            if not self._UUID_RE.match(u):
-                continue
-            if has_mp and u not in preview:
-                continue
-            try:
-                client.copy_from_device_to_exact(
-                    device, f'{rel_path}/{u}/{u}.kmz',
-                    os.path.join(tmp_dir, u + '.kmz'),
-                )
-            except Exception:
-                pass
-            kmz = os.path.join(tmp_dir, u + '.kmz')
-            create_ms, n_wp = (self._read_kmz_meta(kmz)
-                               if os.path.exists(kmz) else (0, 0))
-            missions.append({
-                'uuid': u, 'create_ms': create_ms,
-                'date_str': self._fmt_ms(create_ms), 'n_wp': n_wp,
-            })
-        missions.sort(key=lambda m: m['create_ms'] or 0, reverse=True)
-        return missions, tmp_dir
-
-    def _list_shell_children_linux(self, parts):
-        """
-        Linux: return the child "folder" names one level below `parts`.
-
-        parts == []            -> connected MTP device display names
-        parts == [device, ...] -> that device's folder tree, navigated by name
-        """
-        client = _get_mtp_client()
-        if client is None:
-            return []
-        try:
-            if not parts:
-                return [client.get_display_name(d) for d in client.list_devices()]
-            device = self._linux_resolve_device(client, parts[0])
-            if device is None:
-                return []
-            rel_path = self._linux_navigate(client, device, parts[1:])
-            if rel_path is None and len(parts) > 1:
-                return []
-            return client.list_folder(device, rel_path or '')
-        except Exception:
-            return []
-
-    def _list_missions_at_path_linux(self, parts):
-        """
-        Linux: navigate a chosen device path (from the manual browser) and
-        list its waypoint missions.
-        Returns (status, missions) with status 'ok' / 'no_mission' / 'error'.
-        """
-        client = _get_mtp_client()
-        if client is None or not parts:
-            return ('error', [])
-        device = self._linux_resolve_device(client, parts[0])
-        if device is None:
-            return ('error', [])
-        rel_path = self._linux_navigate(client, device, parts[1:])
-        if rel_path is None:
-            return ('error', [])
-        missions, tmp_dir = self._linux_read_missions(client, device, rel_path)
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-        return ('ok' if missions else 'no_mission', missions)
-
-    def _list_rc_missions_linux(self):
-        """
-        Linux: scan connected MTP devices for the DJI waypoint folder and
-        return all missions found there.
-
-        Returns (status, waypoint_path, missions, detail) — same contract as
-        _list_rc_missions_windows(). waypoint_path is a '/'-joined string of
-        [device_display_name] + path parts, re-parsed by
-        _export_to_mtp_rc_linux() on export.
-        """
-        client = _get_mtp_client()
-        if client is None:
-            return ('error', None, [],
-                    'No MTP backend detected on this system.\n\n'
-                    'Install gvfs-backends (GNOME) or kio-extras (KDE), '
-                    'connect the RC via USB, open it once in your file '
-                    'manager so it gets mounted, then try again.')
-
-        try:
-            devices = client.list_devices()
-        except Exception as exc:
-            return ('error', None, [], f'MTP scan failed: {exc}')
-
-        if not devices:
-            return ('not_connected', None, [], '')
-
-        device_seen = False
-        for device in devices:
-            disp = client.get_display_name(device)
-            if re.search('DJI|RC', disp, re.IGNORECASE):
-                device_seen = True
-
-            try:
-                top_folders = client.list_folder(device, '')
-            except Exception:
-                top_folders = []
-            candidate_bases = [[]] + [[t] for t in top_folders]
-
-            for base in candidate_bases:
-                rel_path = self._linux_navigate(client, device, base + _RC_REL_PARTS)
-                if rel_path is None:
-                    continue
-                device_seen = True
-                missions, tmp_dir = self._linux_read_missions(client, device, rel_path)
-                shutil.rmtree(tmp_dir, ignore_errors=True)
-                wp_path = '/'.join([disp] + base + list(_RC_REL_PARTS))
-                if not missions:
-                    return ('no_mission', wp_path, [], '')
-                return ('ok', wp_path, missions, '')
-
-        return ('no_mission', None, [], '') if device_seen else ('not_connected', None, [], '')
-
-    @staticmethod
-    def _linux_remove_remote(client, device, rel_path):
-        """
-        Best-effort delete of a file on the MTP device before overwriting it.
-        gio/kioclient5 copy can refuse to overwrite an existing destination,
-        unlike a plain filesystem copy, so this is called first.
-        """
-        try:
-            if client.backend == 'kio':
-                subprocess.run(['kioclient5', 'remove', f'mtp:/{device}/{rel_path}'],
-                                capture_output=True, text=True, timeout=15)
-            elif device.startswith('mtp://'):
-                subprocess.run(['gio', 'remove', device.rstrip('/') + '/' + rel_path],
-                                capture_output=True, text=True, timeout=15)
-            else:
-                full = os.path.join(device, rel_path)
-                if os.path.exists(full):
-                    os.remove(full)
-        except Exception:
-            pass
-
-    def _export_to_mtp_rc_linux(self, rc_dir, mission, waypoints, target_uuid=None):
-        """
-        Linux: export the KMZ directly to a DJI RC connected as an MTP
-        device, via gvfs (GNOME) or KIO (KDE).
-
-        rc_dir is the '/'-joined [device_display_name, *path_parts] string
-        produced by _list_rc_missions_linux() / the manual browser.
-
-        Returns (success: bool, detail: str) — same contract as the Windows
-        implementation.
-        """
-        client = _get_mtp_client()
-        if client is None:
-            return False, (
-                'No MTP backend detected on this system.\n\n'
-                'Install gvfs-backends (GNOME) or kio-extras (KDE), check '
-                'the RC is still connected via USB, then retry.'
-            )
-
-        parts = [p for p in rc_dir.split('/') if p]
-        if not parts:
-            return False, f'Invalid RC path: {rc_dir}'
-        disp_name, rel_parts = parts[0], parts[1:]
-
-        device = self._linux_resolve_device(client, disp_name)
-        if device is None:
-            return False, f'DJI RC "{disp_name}" is no longer connected.'
-        rel_path = '/'.join(rel_parts)
-
-        if target_uuid:
-            uuid_name = target_uuid
-        else:
-            try:
-                entries = client.list_folder(device, rel_path)
-            except Exception as exc:
-                return False, f'Could not read the RC waypoint folder: {exc}'
-            uuids = [e for e in entries if self._UUID_RE.match(e)]
-            if not uuids:
-                return False, (
-                    'No valid mission folder found on the RC.\n\n'
-                    'Open DJI Fly on the RC, create a waypoint mission '
-                    '(even a 3-point dummy), then export again.'
-                )
-            uuid_name = uuids[0]
-
-        tmp_dir = tempfile.mkdtemp(prefix='flypath_')
-        try:
-            tmp_kmz = os.path.join(tmp_dir, uuid_name + '.kmz')
-            try:
-                self._write_mission_kmz(tmp_kmz, waypoints, mission)
-            except Exception as exc:
-                return False, f'Could not write KMZ: {exc}'
-
-            dest_rel = f'{rel_path}/{uuid_name}/{uuid_name}.kmz'
-            self._linux_remove_remote(client, device, dest_rel)
-            try:
-                client.copy_to_device(tmp_kmz, device, dest_rel)
-            except Exception as exc:
-                return False, (
-                    f'Copy to RC failed.\n\n{exc}\n\n'
-                    'Check the RC is still connected and unlocked.'
-                )
-            return True, uuid_name
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -3010,6 +2899,9 @@ class FlyPathDialog(QWidget):
             QgsProject.instance().layersRemoved.disconnect(self._refresh_layer_combo)
         except Exception:
             pass
+        if self._thumb_dir:
+            shutil.rmtree(self._thumb_dir, ignore_errors=True)
+            self._thumb_dir = None
 
     def closeEvent(self, event):
         self.cleanup()
